@@ -1,0 +1,16 @@
+[project]
+name = "onepace"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.13"
+dependencies = [
+    "bcoding>=1.5",
+    "bs4>=0.0.2",
+    "gdown>=5.2.0",
+    "pedros>=0.0.11",
+    "polars>=1.36.1",
+    "requests>=2.32.5",
+    "requests-cache>=1.2.1",
+    "rich>=14.2.0",
+    "torrentp>=0.2.4",
+]
