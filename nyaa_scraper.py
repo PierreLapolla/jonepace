@@ -5,21 +5,16 @@ import time
 from pathlib import Path
 
 import polars as pl
-import requests_cache
 from bs4 import BeautifulSoup
 from pedros import get_logger, progbar
 
 from config import config
+from cache_manager import cache
 
 
 class NyaaScraper:
     def __init__(self):
         self.logger = get_logger()
-        self.session = requests_cache.CachedSession(
-            str(config.onepace_folder / "nyaa_cache"),
-            expire_after=3600 * 24,  # 1 day
-            backend='sqlite'
-        )
 
     def scrape_all_pages(self, query: str = "one pace"):
         results = []
@@ -29,9 +24,20 @@ class NyaaScraper:
         pbar = None
         while True:
             url = f"{config.NYAA_BASE_URL}/?f=0&c=0_0&q={query.replace(' ', '+')}&p={page}"
-            resp = self.session.get(url, timeout=30)
-            resp.raise_for_status()
-            soup = BeautifulSoup(resp.content, 'html.parser')
+            
+            cache_key = f"nyaa_scrape_{url}"
+            cached_resp = cache.get(cache_key)
+            
+            if cached_resp:
+                content, from_cache = cached_resp, True
+            else:
+                import requests
+                resp = requests.get(url, timeout=30)
+                resp.raise_for_status()
+                content, from_cache = resp.content, False
+                cache.set(cache_key, content, expire=3600 * 24)
+
+            soup = BeautifulSoup(content, 'html.parser')
 
             if total_expected is None:
                 info_div = soup.find('div', class_='pagination-page-info')
@@ -72,7 +78,7 @@ class NyaaScraper:
 
             if not soup.find('li', class_='next'): break
             page += 1
-            if not resp.from_cache:
+            if not from_cache:
                 time.sleep(0.5)
 
         return results, total_expected

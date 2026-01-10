@@ -4,18 +4,17 @@ import re
 from pathlib import Path
 
 import polars as pl
-import requests_cache
 from bcoding import bdecode
 from pedros import get_logger
 from pedros import progbar
 
 from config import config
+from cache_manager import cache
 
 
 class TorrentAnalyzer:
     def __init__(self):
         self.logger = get_logger()
-        self.session = requests_cache.CachedSession(str(config.onepace_folder / config.TORRENT_INFO_CACHE))
 
     def get_metadata_hashes(self) -> set[str]:
         hashes = set()
@@ -28,8 +27,14 @@ class TorrentAnalyzer:
         return hashes
 
     def get_torrent_info(self, torrent_url: str) -> dict:
+        cache_key = f"torrent_info_{torrent_url}"
+        cached = cache.get(cache_key)
+        if cached:
+            return cached
+
         try:
-            resp = self.session.get(torrent_url, timeout=30)
+            import requests
+            resp = requests.get(torrent_url, timeout=30)
             if resp.status_code != 200:
                 return {"files": [], "total_size": 0}
             torrent_data = bdecode(resp.content)
@@ -44,7 +49,10 @@ class TorrentAnalyzer:
                 else:
                     files.append(info['name'])
                     total_size = info.get('length', 0)
-            return {"files": files, "total_size": total_size}
+            
+            result = {"files": files, "total_size": total_size}
+            cache.set(cache_key, result)
+            return result
         except Exception as e:
             self.logger.error(f"Error fetching torrent {torrent_url}: {e}")
             return {"files": [], "total_size": 0}

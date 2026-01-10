@@ -7,15 +7,14 @@ from pathlib import Path
 @dataclass
 class Config:
     _onepace_folder_path: Path = Path(__file__).parent / "OnePace"
+    CACHE_PATH: Path = _onepace_folder_path / "app_cache"
     METADATA_ZIP: str = "metadata.zip"
-    METADATA_CACHE: str = "metadata_cache.json"
     METADATA_SIZE: str = "764MB"
     METADATA_FILE_ID: str = "1NdEb7X0Rxjp7b_76BH9-TnObTClcASuB"
     METADATA_SOURCE_FOLDER: str = "Barry's One Pace Jellyfin Metadata Set"
     NYAA_BASE_URL: str = "https://nyaa.si"
     NYAA_SEARCH_URL: str = "{base_url}/?f=0&c=0_0&q=one+pace&p={page}"
     TORRENTS_CSV: str = "one_pace_torrents.csv"
-    TORRENT_INFO_CACHE: str = "torrent_info_cache.sqlite"
     DOWNLOAD_PATH: Path = Path(__file__).parent / "OnePace" / "downloads"
     METADATA_PATH: Path = Path(__file__).parent / "OnePace" / "metadata" / "One Pace"
     ARCS: list[str] = (
