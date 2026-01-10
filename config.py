@@ -17,7 +17,7 @@ class Config:
     TORRENTS_CSV: str = "one_pace_torrents.csv"
     DOWNLOAD_PATH: Path = Path(__file__).parent / "OnePace" / "downloads"
     METADATA_PATH: Path = Path(__file__).parent / "OnePace" / "metadata" / "One Pace"
-    ARCS: list[str] = (
+    ARCS: list[str | list[str]] = (
         "Romance Dawn",
         "Orange Town",
         "Syrup Village",
@@ -27,11 +27,11 @@ class Config:
         "The Adventures of Buggy's Crew",
         "Loguetown",
         "Reverse Mountain",
-        "Whisky Peak",
+        ["Whisky Peak", "Whiskey Peak"],
         "The Trials of Koby-Meppo",
         "Little Garden",
         "Drum Island",
-        "Alabasta",
+        ["Alabasta", "Arabasta"],
         "Jaya",
         "Skypiea",
         "Long Ring Long Land",

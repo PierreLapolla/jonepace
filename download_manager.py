@@ -38,7 +38,24 @@ class DownloadManager:
 
         df = pl.read_csv(csv_path)
         to_download = df.filter(pl.col("download"))
-        to_download = to_download.sort("name")
+
+        arc_order = {tuple(arc) if isinstance(arc, list) else arc: i for i, arc in enumerate(config.ARCS)}
+
+        def get_arc_index(name: str) -> int:
+            name_lower = name.lower()
+            for arc in config.ARCS:
+                if isinstance(arc, list):
+                    if any(variation.lower() in name_lower for variation in arc):
+                        return arc_order[tuple(arc)]
+                else:
+                    if arc.lower() in name_lower:
+                        return arc_order[arc]
+            return len(config.ARCS)
+
+        to_download = to_download.with_columns(
+            pl.col("name").map_elements(get_arc_index, return_dtype=pl.Int64).alias("arc_index")
+        )
+        to_download = to_download.sort("arc_index", "name")
 
         if len(to_download) == 0:
             self.logger.info("No torrents tagged for download.")
