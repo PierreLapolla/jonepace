@@ -1,6 +1,6 @@
 from __future__ import annotations
 
 from diskcache import Cache
-from config import config
+from onepace.core.config import config
 
 cache = Cache(str(config.CACHE_PATH))

@@ -7,8 +7,9 @@ from pathlib import Path
 import gdown
 from pedros import get_logger
 
-from config import config
-from cache_manager import cache
+from onepace.core.config import config
+from onepace.utils.cache import cache
+from onepace.utils.system import check_disk_space
 
 
 class MetadataManager:
@@ -17,17 +18,24 @@ class MetadataManager:
         self.zip_path = onepace_folder / config.METADATA_ZIP
         self.logger = get_logger()
 
-    def download_and_extract_metadata(self):
+    def download_and_extract_metadata(self, force_redownload: bool = False):
         extract_path = self.onepace_folder / config.METADATA_ZIP.replace('.zip', '')
         metadata_cache = cache.get("metadata", {})
 
-        if metadata_cache.get("extracted") and extract_path.exists():
-            self.logger.info("Metadata already extracted, skipping.")
+        if metadata_cache.get("extracted") and extract_path.exists() and not force_redownload:
+            self.logger.info("Metadata already extracted. Skipping.")
             return True
 
-        self.logger.info(f"Last updated metadata set is {config.METADATA_SIZE}.")
-        if input("Do you want to download and extract metadata now? (y/n): ").lower() != 'y':
+        # Metadata size is roughly 764MB zip + extraction space.
+        # Let's assume we need at least 1.5GB to be safe for zip + extraction.
+        required_space = 1.5 * 1024 * 1024 * 1024 
+        if not check_disk_space(self.onepace_folder, int(required_space)):
             return False
+
+        if force_redownload:
+            self.logger.info("Force redownload requested.")
+            metadata_cache["downloaded"] = False
+            cache.set("metadata", metadata_cache)
 
         if not metadata_cache.get("downloaded") or not self.zip_path.exists():
             self.logger.info(f"Downloading metadata to /{self.zip_path.name}...")

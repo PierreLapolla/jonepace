@@ -7,8 +7,9 @@ import polars as pl
 from pedros import get_logger, progbar
 from torrentp import TorrentDownloader
 
-from config import config
-from cache_manager import cache
+from onepace.core.config import config
+from onepace.utils.cache import cache
+from onepace.utils.system import check_disk_space, get_disk_info
 
 
 class DownloadManager:
@@ -16,23 +17,23 @@ class DownloadManager:
         self.logger = get_logger()
         config.DOWNLOAD_PATH.mkdir(parents=True, exist_ok=True)
 
-    def check_disk_space(self, required_size: int) -> bool:
-        total, used, free = shutil.disk_usage(config.onepace_folder)
-        
+    def log_disk_usage(self, required_size: int):
+        info = get_disk_info(config.onepace_folder)
         self.logger.info(f"Disk Usage Info:")
-        self.logger.info(f"  - Total: {total / (1024**3):.2f} GB")
-        self.logger.info(f"  - Used:  {used / (1024**3):.2f} GB")
-        self.logger.info(f"  - Free:  {free / (1024**3):.2f} GB")
+        self.logger.info(f"  - Total: {info['total'] / (1024**3):.2f} GB")
+        self.logger.info(f"  - Used:  {info['used'] / (1024**3):.2f} GB")
+        self.logger.info(f"  - Free:  {info['free'] / (1024**3):.2f} GB")
         self.logger.info(f"  - Required for download: {required_size / (1024**3):.2f} GB")
 
-        if free < required_size:
-            self.logger.error("Not enough disk space for the selected torrents!")
-            return False
-            
-        confirm = input("\nDo you want to proceed with the download? (y/n): ").lower()
-        return confirm == 'y'
+    def get_required_size(self, csv_path: Path) -> int:
+        if not csv_path.exists():
+            return 0
 
-    async def download_torrents(self, csv_path: Path):
+        df = pl.read_csv(csv_path)
+        to_download = df.filter(pl.col("download"))
+        return to_download["size"].sum()
+
+    async def download_torrents(self, csv_path: Path, use_cache: bool = True):
         if not csv_path.exists():
             return
 
@@ -63,34 +64,39 @@ class DownloadManager:
 
         total_size = to_download["size"].sum()
         
-        if not self.check_disk_space(total_size):
-            self.logger.info("Download cancelled by user or insufficient space.")
-            return
+        self.log_disk_usage(total_size)
 
         size_gb = total_size / (1024 ** 3)
         self.logger.info(f"Starting download of {len(to_download)} torrents ({size_gb:.2f} GB)...")
 
-        download_cache = cache.get("downloads", [])
+        download_cache = cache.get("downloads", {})
+        if not isinstance(download_cache, dict): # Migration from old list format
+            download_cache = {name: "" for name in download_cache}
 
         for row in to_download.iter_rows(named=True):
             name = row['name']
             magnet = row['magnet']
             
-            if name in download_cache:
-                self.logger.info(f"Skipping {name}, already in cache.")
-                continue
+            cached_magnet = download_cache.get(name)
+            
+            if cached_magnet is not None and use_cache:
+                if cached_magnet == magnet:
+                    self.logger.info(f"Skipping {name}, already in cache and magnet matches.")
+                    continue
+                else:
+                    self.logger.info(f"Magnet changed for {name}, will re-download.")
 
             save_path = config.DOWNLOAD_PATH / name
-            if save_path.exists():
+            if save_path.exists() and cached_magnet == magnet and use_cache:
                 self.logger.info(f"Skipping {name}, already exists in downloads.")
-                download_cache.append(name)
+                download_cache[name] = magnet
                 cache.set("downloads", download_cache)
                 continue
 
             try:
                 downloader = TorrentDownloader(magnet, str(config.DOWNLOAD_PATH))
                 await downloader.start_download()
-                download_cache.append(name)
+                download_cache[name] = magnet
                 cache.set("downloads", download_cache)
             except Exception as e:
                 self.logger.error(f"Failed to download {name}: {e}")
