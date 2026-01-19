@@ -4,14 +4,14 @@ import re
 import time
 from pathlib import Path
 
+import libtorrent as lt
 import polars as pl
 import requests
 from bs4 import BeautifulSoup
-from bcoding import bdecode
 from pedros import get_logger, progbar
 
-from onepace.utils.cache import cache
-from onepace.core.config import config
+from archive.onepace.core.config import config
+from archive.onepace.utils.cache import cache
 
 
 class LibraryManager:
@@ -108,18 +108,11 @@ class LibraryManager:
             return {"files": [], "total_size": 0}
 
         try:
-            torrent_data = bdecode(content)
-            files = []
-            total_size = 0
-            info = torrent_data.get('info', {})
-            if 'files' in info:
-                for f in info['files']:
-                    files.append("/".join(f['path']))
-                    total_size += f.get('length', 0)
-            else:
-                files.append(info.get('name', ''))
-                total_size = info.get('length', 0)
-            
+            e = lt.bdecode(content)
+            info = lt.torrent_info(e)
+            files = [f.path for f in info.files()]
+            total_size = info.total_size()
+
             result = {"files": files, "total_size": total_size}
             cache.set(cache_key, result)
             return result
@@ -132,6 +125,11 @@ class LibraryManager:
         if not config.METADATA_PATH.exists():
             return hashes
         for nfo in config.METADATA_PATH.rglob("*.nfo"):
+            # Exclude [One Pace] Specials folder as it often contains duplicates
+            # or experimental versions (like April Fools) that shouldn't be
+            # automatically downloaded unless explicitly requested.
+            if "[One Pace] Specials" in str(nfo):
+                continue
             match = re.search(r"\[([0-9A-F]{8})\]", nfo.name)
             if match:
                 hashes.add(match.group(1).upper())
@@ -142,29 +140,45 @@ class LibraryManager:
             df = pl.read_csv(csv_path)
         else:
             df = self.scrape_nyaa(use_cache=use_cache)
-        
+
         required_hashes = self.get_metadata_hashes()
         self.logger.info(f"Metadata check: {len(required_hashes)} episodes required.")
 
         torrents_data = []
         hash_to_torrents = {}
 
-        for row in progbar(df.iter_rows(named=True), desc="Analyzing torrents", total=len(df), transient=True):
+        def process_row(row):
             torrent_url = row.get('torrent')
             if not torrent_url:
-                continue
+                return None
 
             info = self.get_torrent_info(torrent_url, use_cache=use_cache)
             torrent_hashes = []
             for f in info['files']:
+                # The regex should match [8-char-hex]
                 match = re.search(r"\[([0-9A-F]{8})\]", f, re.IGNORECASE)
                 if match:
                     h = match.group(1).upper()
                     torrent_hashes.append(h)
-            
+
             useful_hashes = [h for h in torrent_hashes if h in required_hashes]
-            
-            t_info = {
+
+            # If the torrent has no useful hashes, we don't want to download it
+            # This addresses the issue where torrents with hashes not in metadata are downloaded
+            if not useful_hashes:
+                # SPECIAL CASE: If we're using cache, and this torrent is already in our download cache,
+                # we should keep it even if it doesn't match any CURRENT metadata hash.
+                # This prevents "disappearing" torrents from the selection if metadata changes.
+                download_cache = cache.get("downloads", {})
+                if not isinstance(download_cache, dict):
+                    download_cache = {name: "" for name in download_cache}
+                if row['name'] in download_cache:
+                    # Keep it as it was likely useful before
+                    pass
+                else:
+                    return None
+
+            return {
                 "name": row['name'],
                 "magnet": row['magnet'],
                 "torrent": row['torrent'],
@@ -174,9 +188,15 @@ class LibraryManager:
                 "count": len(torrent_hashes),
                 "download": False
             }
-            torrents_data.append(t_info)
+
+        rows = df.iter_rows(named=True)
+        for row in progbar(rows, desc="Analyzing torrents", total=len(df), transient=True):
+            t_info = process_row(row)
+            if not t_info:
+                continue
             
-            for h in useful_hashes:
+            torrents_data.append(t_info)
+            for h in t_info['useful_hashes']:
                 if h not in hash_to_torrents:
                     hash_to_torrents[h] = []
                 hash_to_torrents[h].append(t_info)
@@ -189,15 +209,35 @@ class LibraryManager:
                 best_torrent['download'] = True
                 found_hashes.add(h)
 
+        # Also mark for download anything that is in the download cache, 
+        # to ensure it's recorded in the CSV as 'download: true' for future runs
+        download_cache = cache.get("downloads", {})
+        if not isinstance(download_cache, dict):
+            download_cache = {name: "" for name in download_cache}
+        
+        for t in torrents_data:
+            if t['name'] in download_cache:
+                t['download'] = True
+
         results = []
         total_download_size = 0
+        new_download_size = 0
         download_count = 0
-        
+        new_download_count = 0
+
+        # We already have download_cache from above, but let's be safe
+        download_cache = cache.get("downloads", {})
+        if not isinstance(download_cache, dict):
+            download_cache = {name: "" for name in download_cache}
+
         for t in torrents_data:
             if t['download']:
                 total_download_size += t['size']
                 download_count += 1
-            
+                if t['name'] not in download_cache:
+                    new_download_size += t['size']
+                    new_download_count += 1
+
             results.append({
                 "name": t['name'],
                 "magnet": t['magnet'],
@@ -208,9 +248,13 @@ class LibraryManager:
             })
 
         pl.DataFrame(results).write_csv(csv_path)
-        
+
         missing = required_hashes - found_hashes
         self.logger.info(f"Analysis complete: {len(found_hashes)}/{len(required_hashes)} episodes found.")
         if missing:
             self.logger.warning(f"{len(missing)} episodes missing from available torrents.")
-        self.logger.info(f"Selected {download_count} torrents totaling {total_download_size / (1024**3):.2f} GB.")
+        
+        self.logger.info(f"Selected {download_count} torrents totaling {total_download_size / (1024 ** 3):.2f} GB.")
+        if new_download_count < download_count:
+            self.logger.info(f"  - {new_download_count} new torrents to download ({new_download_size / (1024 ** 3):.2f} GB).")
+            self.logger.info(f"  - {download_count - new_download_count} torrents already in cache.")

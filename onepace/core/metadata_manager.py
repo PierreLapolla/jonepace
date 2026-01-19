@@ -1,60 +1,88 @@
-from __future__ import annotations
-
-import shutil
+import os
+import gdown
 import zipfile
 from pathlib import Path
+from rich.console import Console
 
-import gdown
-from pedros import get_logger
+console = Console()
 
-from onepace.core.config import config
-from onepace.utils.cache import cache
-from onepace.utils.system import check_disk_space
-
+METADATA_GDRIVE_ID = "1NdEb7X0Rxjp7b_76BH9-TnObTClcASuB"
 
 class MetadataManager:
-    def __init__(self, onepace_folder: Path):
-        self.onepace_folder = onepace_folder
-        self.zip_path = onepace_folder / config.METADATA_ZIP
-        self.logger = get_logger()
+    def __init__(self, cache_manager):
+        self.cache_manager = cache_manager
+        self.metadata_dir = Path(cache_manager.state["metadata"]["local_path"])
 
-    def download_and_extract_metadata(self, force_redownload: bool = False):
-        extract_path = self.onepace_folder / config.METADATA_ZIP.replace('.zip', '')
-        metadata_cache = cache.get("metadata", {})
+    def download_and_extract(self):
+        output_zip = self.metadata_dir / "metadata.zip"
+        self.metadata_dir.mkdir(parents=True, exist_ok=True)
+        
+        if not self.cache_manager.state["metadata"]["downloaded"] or not output_zip.exists():
+            console.print("[yellow]Downloading metadata...[/yellow]")
+            try:
+                gdown.download(id=METADATA_GDRIVE_ID, output=str(output_zip), quiet=False)
+            except Exception as e:
+                console.print(f"[red]Failed to download metadata: {e}[/red]")
+                return
 
-        if metadata_cache.get("extracted") and extract_path.exists() and not force_redownload:
-            self.logger.info("Metadata already extracted. Skipping.")
-            return True
+            console.print("[yellow]Extracting metadata...[/yellow]")
+            try:
+                with zipfile.ZipFile(output_zip, 'r') as zip_ref:
+                    zip_ref.extractall(self.metadata_dir)
+            except Exception as e:
+                console.print(f"[red]Failed to extract metadata: {e}[/red]")
+                return
+            
+            self.cache_manager.state["metadata"]["downloaded"] = True
+            self.cache_manager.save_state()
+            console.print("[green]Metadata downloaded and extracted.[/green]")
+        else:
+            console.print("[green]Metadata already present in cache.[/green]")
 
-        # Metadata size is roughly 764MB zip + extraction space.
-        # Let's assume we need at least 1.5GB to be safe for zip + extraction.
-        required_space = 1.5 * 1024 * 1024 * 1024 
-        if not check_disk_space(self.onepace_folder, int(required_space)):
-            return False
 
-        if force_redownload:
-            self.logger.info("Force redownload requested.")
-            metadata_cache["downloaded"] = False
-            cache.set("metadata", metadata_cache)
+    def load_index(self):
+        """
+        Parses the extracted metadata files into an internal index.
+        Returns a dictionary with 'arcs' and 'episodes'.
+        """
+        index = {
+            "arcs": [],
+            "episodes": {} # mapped by expected filename (without extension)
+        }
+        
+        # The metadata is extracted into a subfolder named "Barry's One Pace Jellyfin Metadata Set/One Pace"
+        base_path = next(self.metadata_dir.glob("*/One Pace"), None)
+        if not base_path:
+            # Fallback to metadata_dir if the structure is different
+            base_path = self.metadata_dir / "One Pace"
+            
+        if not base_path.exists():
+            console.print("[red]Metadata structure error: 'One Pace' directory not found.[/red]")
+            return index
 
-        if not metadata_cache.get("downloaded") or not self.zip_path.exists():
-            self.logger.info(f"Downloading metadata to /{self.zip_path.name}...")
-            gdown.download(id=config.METADATA_FILE_ID, output=str(self.zip_path), quiet=False)
-            metadata_cache["downloaded"] = True
-            cache.set("metadata", metadata_cache)
-
-        self.logger.info(f"Extracting /{self.zip_path.name}...")
-        with zipfile.ZipFile(self.zip_path, 'r') as zip_ref:
-            zip_ref.extractall(self.onepace_folder)
-
-        source_folder = self.onepace_folder / config.METADATA_SOURCE_FOLDER
-        if source_folder.exists():
-            if extract_path.exists():
-                shutil.rmtree(extract_path)
-            source_folder.rename(extract_path)
-
-        metadata_cache["extracted"] = True
-        cache.set("metadata", metadata_cache)
-        self.logger.info("Metadata setup complete.")
-
-        return True
+        # Iterate through arc folders
+        for arc_folder in sorted(base_path.iterdir()):
+            if arc_folder.is_dir() and arc_folder.name.startswith("[One Pace]"):
+                arc_info = {
+                    "name": arc_folder.name,
+                    "path": arc_folder,
+                    "relative_path": arc_folder.relative_to(base_path),
+                    "episodes": []
+                }
+                
+                # Each .nfo file (except season.nfo) represents an episode
+                for nfo_file in arc_folder.glob("*.nfo"):
+                    if nfo_file.name == "season.nfo":
+                        continue
+                    
+                    episode_name = nfo_file.stem
+                    arc_info["episodes"].append(episode_name)
+                    index["episodes"][episode_name] = {
+                        "arc_name": arc_folder.name,
+                        "relative_path": arc_folder.relative_to(base_path) / f"{episode_name}.mkv"
+                    }
+                
+                arc_info["episodes"].sort()
+                index["arcs"].append(arc_info)
+        
+        return index

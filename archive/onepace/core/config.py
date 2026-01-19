@@ -10,11 +10,11 @@ class Config:
     CACHE_PATH: Path = ONEPACE_FOLDER / "app_cache"
     DOWNLOAD_PATH: Path = ONEPACE_FOLDER / "downloads"
     METADATA_PATH: Path = ONEPACE_FOLDER / "metadata" / "One Pace"
-    
+
     METADATA_ZIP: str = "metadata.zip"
     METADATA_FILE_ID: str = "1NdEb7X0Rxjp7b_76BH9-TnObTClcASuB"
     METADATA_SOURCE_FOLDER: str = "Barry's One Pace Jellyfin Metadata Set"
-    
+
     NYAA_BASE_URL: str = "https://nyaa.si"
     NYAA_SEARCH_URL: str = "{base_url}/?f=0&c=0_0&q=one+pace&p={page}"
     TORRENTS_CSV: str = "one_pace_torrents.csv"
