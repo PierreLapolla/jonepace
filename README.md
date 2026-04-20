@@ -1,43 +1,36 @@
-# Jellyfin One Pace Downloader
+# Jonepace
 
-Automated tool to manage and download One Pace episodes from Nyaa.si.
+Jonepace downloads the full [One Pace](https://onepace.net/en) library and the official Jellyfin metadata set for use in Jellyfin.
 
-## Features
+## Warning
 
-- **Metadata Management**: Automatically downloads and extracts the latest One Pace metadata for Jellyfin.
-- **Scraping**: Scrapes Nyaa.si for the latest One Pace torrents.
-- **Analysis**: Analyzes available torrents and compares them with your local metadata to only download required episodes with no duplicates.
-- **Download**: Downloads missing episodes automatically using `torrentp`.
-- **Disk Space Check**: Verifies available disk space before starting downloads.
-- **Caching**: Use a cache to avoid re-doing all the work if you run the program multiple times.
+`jonepace` downloads the full One Pace library and metadata set.
 
-Note: the metadata is the source of truth for the program, the downloaded set is currently managed by Barry from the
-official One Pace Discord server.
+Before running it, make sure you have at least **400 GB** of free disk space available.
 
-## Installation
+This tool does not define or maintain the metadata itself. Barry's Jellyfin metadata set, maintained by the One Pace
+team, is treated as the source of truth for what gets downloaded and how files are organized.
 
-Ensure you have [uv](https://github.com/astral-sh/uv) installed.
+## Requirements
 
-```bash
-# Clone the repository
-git clone https://github.com/PierreLapolla/onepace.git
-cd onepace
+Make sure `uv` is installed and available in your terminal, see [Installing uv](https://docs.astral.sh/uv/getting-started/installation/)
 
-# Install dependencies
-uv sync
-```
+## Run
 
-## Usage
-
-Simply run the main script:
+Use the following command to start the download:
 
 ```bash
-uv run main.py
+uvx jonepace
 ```
 
-The program will guide you through the process with interactive prompts:
+After the tool is done, you can copy `Barry's One Pace Jellyfin Metadata Set/One Pace` into your Jellyfin library
+location.
 
-- Confirming if you want to force a metadata update.
-- Asking whether to skip scraping if recent data is available.
-- Confirming before starting the download of identified torrents.
+## What it does
 
+- Downloads metadata archive from Google Drive
+- Extracts metadata into local project directory
+- Finds all `magnets.csv` files
+- Downloads torrent contents into matching arc folders
+- Moves lonely `.mkv` files beside matching `.nfo` files using filename hash
+- Removes empty leftover directories after normalization

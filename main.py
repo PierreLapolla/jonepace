@@ -1,122 +1,152 @@
-import sys
+import asyncio
+import logging
+import re
+import shutil
+from dataclasses import dataclass, field
 from pathlib import Path
-import questionary
-from rich.console import Console
-from rich.panel import Panel
-from pedros import safe
 
-from onepace.utils.cache import CacheManager
-from onepace.core.metadata_manager import MetadataManager
-from onepace.core.scanner import Scanner
-
-console = Console()
-cache_manager = CacheManager()
-    
-@safe
-def main_menu():
-    console.clear()
-    console.print(Panel("[bold blue]One Pace for Jellyfin[/bold blue]\n[italic]Terminal Setup Tool[/italic]", expand=False))
-    
-    choices = ["Full run", "Clear cache", "Exit"]
-    choice = questionary.select(
-        "Select an option",
-        choices=choices,
-        default="Full run",
-        use_indicator=True
-    ).ask()
-    
-    if choice == "Full run":
-        run_workflow()
-    elif choice == "Clear cache":
-        clear_cache()
-    elif choice == "Exit" or choice is None:
-        console.print("[yellow]Exiting...[/yellow]")
-        sys.exit(0)
-
-def run_workflow():
-    console.print("[bold green]Starting Full Run...[/bold green]")
-    
-    # Step B: Metadata
-    metadata_index = download_metadata()
-    
-    # Step C: Scan
-    scan_existing_files(metadata_index)
-    
-    # Step D: Selection
-    select_arcs(metadata_index)
-    
-    # Step E: Download
-    download_episodes()
-    
-    # Step F: Build
-    build_library()
-    
-    # Step G: Summary
-    show_summary()
+import gdown
+import polars as pl
+import torrentp
+from pedros import setup_logging, get_logger
 
 
-def download_metadata():
-    console.print("[blue]Step B: Get / refresh dataset[/blue]")
-    metadata_manager = MetadataManager(cache_manager)
-    metadata_manager.download_and_extract()
-    return metadata_manager.load_index()
+@dataclass(frozen=True, slots=True)
+class AppConfig:
+    here: Path = field(default_factory=lambda: Path(__file__).parent)
+    metadata_file_id: str = "1NdEb7X0Rxjp7b_76BH9-TnObTClcASuB"
+    metadata_folder_name: str = "Barry's One Pace Jellyfin Metadata Set"
+    hash_pattern: re.Pattern[str] = field(
+        default_factory=lambda: re.compile(r"\[([0-9A-Fa-f]{8})](?=\.[^.]+$)")
+    )
 
-def scan_existing_files(metadata_index):
-    console.print("[blue]Step C: Scan for already-available episodes[/blue]")
-    scanner = Scanner(cache_manager, metadata_index)
-    scanner.scan()
+    @property
+    def metadata_zip(self) -> Path:
+        return self.here / "metadata.zip"
 
-def select_arcs(metadata_index):
-    console.print("[blue]Step D: Arc selection[/blue]")
-    
-    if not metadata_index or not metadata_index["arcs"]:
-        console.print("[red]No arcs found in metadata index.[/red]")
+    @property
+    def metadata_root(self) -> Path:
+        return self.here / self.metadata_folder_name
+
+
+@dataclass(frozen=True, slots=True)
+class MagnetDownload:
+    magnet: str
+    download_path: Path
+
+
+setup_logging()
+LOGGER = get_logger()
+logging.getLogger("torrentp").setLevel(logging.ERROR)
+CONFIG = AppConfig()
+
+
+def download_extract_metadata():
+    LOGGER.info(f"Downloading {CONFIG.metadata_file_id}")
+    gdown.cached_download(
+        url=f"https://drive.google.com/uc?id={CONFIG.metadata_file_id}",
+        path=str(CONFIG.metadata_zip),
+        postprocess=gdown.extractall,
+        quiet=True
+    )
+
+
+def get_magnets() -> list[MagnetDownload]:
+    magnet_files = list(CONFIG.metadata_root.rglob("magnets.csv"))
+
+    if not magnet_files:
+        raise FileNotFoundError("No magnets file were found")
+
+    scans = [
+        pl.scan_csv(
+            str(path),
+            has_header=False,
+            new_columns=["magnet"],
+            glob=False,
+        )
+        .with_columns(
+            pl.col("magnet").str.strip_chars().alias("magnet"),
+            pl.lit(str(path.parent)).alias("download_path"),
+        )
+        for path in magnet_files
+    ]
+
+    magnets = (
+        pl.concat(scans)
+        .select(
+            pl.col("magnet"),
+            pl.col("download_path"),
+        )
+        .filter(pl.col("magnet") != "")
+        .unique(subset=["magnet", "download_path"], maintain_order=True)
+        .collect()
+        .to_dicts()
+    )
+
+    LOGGER.info(f"Found {len(magnets)} magnets")
+
+    return [
+        MagnetDownload(
+            magnet=entry["magnet"],
+            download_path=Path(entry["download_path"]),
+        )
+        for entry in magnets
+    ]
+
+
+def normalize_downloaded_videos(download_path: Path):
+    nfo_paths_by_hash: dict[str, Path] = {}
+    for nfo_path in download_path.rglob("*.nfo"):
+        match = CONFIG.hash_pattern.search(nfo_path.name)
+        if match:
+            nfo_paths_by_hash[match.group(1).lower()] = nfo_path
+
+    if not nfo_paths_by_hash:
         return
 
-    # Prepare choices with status info
-    choices = []
-    found_episode_paths = cache_manager.state["scan"]["found_episode_ids"]
-    found_episode_names = [Path(p).stem for p in found_episode_paths]
-    
-    for arc in metadata_index["arcs"]:
-        total = len(arc["episodes"])
-        found = sum(1 for ep in arc["episodes"] if ep in found_episode_names)
-        status = f"({found}/{total})"
-        
-        choices.append(questionary.Choice(
-            title=f"{arc['name']} {status}",
-            value=arc['name'],
-            checked=arc['name'] in cache_manager.state["selection"]["selected_arc_ids"]
-        ))
+    for video_path in download_path.rglob("*.mkv"):
+        match = CONFIG.hash_pattern.search(video_path.name)
+        if not match:
+            continue
 
-    selected = questionary.checkbox(
-        "Select arcs to install (Space to toggle, Enter to confirm)",
-        choices=choices
-    ).ask()
-    
-    if selected is not None:
-        cache_manager.state["selection"]["selected_arc_ids"] = selected
-        cache_manager.save_state()
-        console.print(f"[green]Selected {len(selected)} arcs.[/green]")
+        nfo_path = nfo_paths_by_hash.get(match.group(1).lower())
+        if nfo_path is None:
+            continue
 
-def download_episodes():
-    console.print("[blue]Step E: Download missing episodes[/blue] (Placeholder)")
-    # TODO: libtorrent implementation
+        target_path = nfo_path.with_suffix(".mkv")
+        if video_path == target_path or target_path.exists():
+            continue
 
-def build_library():
-    console.print("[blue]Step F: Build / finalize library[/blue] (Placeholder)")
-    # TODO: Structure folders and move files
+        shutil.move(str(video_path), str(target_path))
 
-def show_summary():
-    console.print("[blue]Step G: Summary[/blue] (Placeholder)")
-    # TODO: Show installation results
+    for directory in sorted(
+        (path for path in download_path.rglob("*") if path.is_dir()),
+        reverse=True,
+    ):
+        try:
+            directory.rmdir()
+        except OSError:
+            pass
 
-def clear_cache():
-    confirm = questionary.confirm("Are you sure you want to clear the cache?", default=False).ask()
-    if confirm:
-        cache_manager.clear()
-        console.print("[red]Cache cleared.[/red]")
+
+def download_magnets(magnets: list[MagnetDownload]):
+    for magnet_download in magnets:
+        magnet_download.download_path.mkdir(parents=True, exist_ok=True)
+
+        downloader = torrentp.TorrentDownloader(
+            magnet_download.magnet,
+            str(magnet_download.download_path),
+            stop_after_download=True,
+        )
+        asyncio.run(downloader.start_download())
+        normalize_downloaded_videos(magnet_download.download_path)
+
+
+def main():
+    download_extract_metadata()
+    magnets = get_magnets()
+    download_magnets(magnets)
 
 
 if __name__ == "__main__":
-    main_menu()
+    main()

@@ -1,13 +1,41 @@
 [project]
-name = "onepace"
-version = "0.1.0"
-description = "CLI application to setup One Pace for Jellyfin"
+name = "jonepace"
+version = "1.0.0"
+description = "Download the full One Pace library and official Jellyfin metadata set"
+readme = "README.md"
 requires-python = ">=3.13"
-dependencies = [
-    "gdown>=5.2.1",
-    "libtorrent>=2.0.11",
-    "pedros>=0.12.2",
-    "platformdirs>=4.5.1",
-    "questionary>=2.1.1",
-    "rich>=14.2.0",
+authors = [
+    { name = "PierreLapolla", email = "plapolla9@gmail.com" },
 ]
+keywords = [
+    "anime",
+    "jellyfin",
+    "media-server",
+    "metadata",
+    "one-pace",
+    "torrent",
+]
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "gdown>=6.0.0",
+    "pedros>=0.12.3",
+    "polars>=1.30.0",
+    "rich>=15.0.0",
+    "torrentp>=0.2.6",
+]
+
+[project.scripts]
+jonepace = "main:main"
+
+[project.urls]
+Homepage = "https://github.com/PierreLapolla/onepace"
+Repository = "https://github.com/PierreLapolla/onepace"
+Issues = "https://github.com/PierreLapolla/onepace/issues"
