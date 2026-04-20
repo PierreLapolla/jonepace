@@ -120,8 +120,8 @@ def normalize_downloaded_videos(download_path: Path):
         shutil.move(str(video_path), str(target_path))
 
     for directory in sorted(
-        (path for path in download_path.rglob("*") if path.is_dir()),
-        reverse=True,
+            (path for path in download_path.rglob("*") if path.is_dir()),
+            reverse=True,
     ):
         try:
             directory.rmdir()
