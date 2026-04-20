@@ -13,7 +13,7 @@ from pedros import setup_logging, get_logger
 
 @dataclass(frozen=True, slots=True)
 class AppConfig:
-    here: Path = field(default_factory=lambda: Path(__file__).parent)
+    here: Path = field(default_factory=lambda: Path.cwd())
     metadata_file_id: str = "1NdEb7X0Rxjp7b_76BH9-TnObTClcASuB"
     metadata_folder_name: str = "Barry's One Pace Jellyfin Metadata Set"
     hash_pattern: re.Pattern[str] = field(

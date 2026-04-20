@@ -1,6 +1,6 @@
 [project]
 name = "jonepace"
-version = "1.0.0"
+version = "1.0.2"
 description = "Download the full One Pace library and official Jellyfin metadata set"
 readme = "README.md"
 requires-python = ">=3.13"
