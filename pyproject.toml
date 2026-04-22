@@ -1,11 +1,12 @@
 [project]
 name = "jonepace"
-version = "1.0.2"
+version = "1.1.0"
 description = "Download the full One Pace library and official Jellyfin metadata set"
 readme = "README.md"
+license = {file = "LICENSE"}
 requires-python = ">=3.13"
 authors = [
-    { name = "PierreLapolla", email = "plapolla9@gmail.com" },
+    { name = "PierreLapolla", email = "pro@pierrelapolla.com" },
 ]
 keywords = [
     "anime",
@@ -25,17 +26,40 @@ classifiers = [
     "Topic :: Utilities",
 ]
 dependencies = [
-    "gdown>=6.0.0",
+    "libtorrent>=2.0.11",
     "pedros>=0.12.3",
-    "polars>=1.30.0",
+    "polars>=1.40.0",
     "rich>=15.0.0",
-    "torrentp>=0.2.6",
 ]
 
+[dependency-groups]
+dev = [
+    "pytest>=8.3.5",
+    "pytest-cov>=6.1.1",
+]
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+    "/README.md",
+    "/LICENSE",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/jonepace"]
+
 [project.scripts]
-jonepace = "main:main"
+jonepace = "jonepace.jonepace:main"
 
 [project.urls]
-Homepage = "https://github.com/PierreLapolla/onepace"
 Repository = "https://github.com/PierreLapolla/onepace"
-Issues = "https://github.com/PierreLapolla/onepace/issues"
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-ra -q --cov=jonepace --cov-report=html"
+testpaths = ["tests"]
+pythonpath = ["src"]
