@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 import re
 from time import sleep
@@ -19,10 +19,11 @@ class TorrentClient:
     def __init__(
         self,
         *,
-        max_concurrent: int = 5,
+        max_concurrent: int = 1,
         poll_interval: float = 0.5,
         refresh_per_second: int = 12,
         listen_interfaces: str = "0.0.0.0:6881",
+        on_torrent_completed: Callable[[TorrentTask], None] | None = None,
     ) -> None:
         if max_concurrent < 1:
             raise ValueError("max_concurrent must be at least 1")
@@ -32,6 +33,7 @@ class TorrentClient:
         self.max_concurrent = max_concurrent
         self.poll_interval = poll_interval
         self.listen_interfaces = listen_interfaces
+        self.on_torrent_completed = on_torrent_completed
 
         self._session: lt.session | None = None
         self._tui = TorrentProgressTUI(
@@ -194,6 +196,11 @@ class TorrentClient:
                     if session is not None:
                         session.remove_torrent(handle)
                 self._handles.pop(task.torrent_id, None)
+                if self.on_torrent_completed is not None:
+                    try:
+                        self.on_torrent_completed(task)
+                    except Exception:
+                        LOGGER.exception(f"Failed to persist completion state for {task.name}")
                 # LOGGER.info("Completed torrent: %s", task.name)
 
     def _update_task_from_status(self, task: TorrentTask, status: lt.torrent_status) -> None:

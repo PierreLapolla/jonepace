@@ -19,3 +19,11 @@ Use the following command to start the download:
 ```bash
 uvx jonepace
 ```
+
+The downloader creates a `cache.csv` file in the download directory. It mirrors `releases.csv` with an extra `completed` column so completed torrents are skipped on later runs, and changed release entries are invalidated and queued again automatically.
+
+You can override the number of simultaneous downloads with `--max-concurrent`:
+
+```bash
+uvx jonepace --max-concurrent 5
+```
