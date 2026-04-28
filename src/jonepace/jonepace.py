@@ -6,7 +6,7 @@ import pandas as pd
 from pedros import get_logger
 from jonepace.libtorrent_wrapper import LibtorrentMagnetClient
 from jonepace.maintainance import maintain
-from jonepace.tui import confirm_download, welcome
+from jonepace.tui import confirm_download, download_progress_sink, report_download_results, welcome
 from requests import get
 
 LOGGER = get_logger()
@@ -18,6 +18,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--maintainance",
         action="store_true",
         help="run CSV maintenance tasks instead of the normal application flow",
+    )
+    parser.add_argument(
+        "--destination",
+        type=Path,
+        default=Path.cwd(),
+        help="directory where torrents will be downloaded (default: current working directory)",
     )
     return parser.parse_args(argv)
 
@@ -83,6 +89,22 @@ def pending_downloads(cache: pd.DataFrame) -> pd.DataFrame:
     return pending.loc[pending["magnet"] != ""]
 
 
+def mark_downloaded(cache: pd.DataFrame, completed_magnets: set[str]) -> pd.DataFrame:
+    if not completed_magnets:
+        return cache
+
+    updated = cache.copy()
+    magnet_series = updated["magnet"].fillna("").astype(str).str.strip()
+    updated.loc[magnet_series.isin(completed_magnets), "downloaded"] = True
+    return updated
+
+
+def save_cache(cache: pd.DataFrame) -> None:
+    path = cache_path()
+    cache.to_csv(path, index=False)
+    LOGGER.info(f"Saved cache to {path}")
+
+
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     if args.maintainance:
@@ -103,6 +125,19 @@ def main(argv: list[str] | None = None) -> None:
     if not confirm_download(pending_size, len(magnets)):
         LOGGER.info("Download cancelled.")
         return
+
+    with LibtorrentMagnetClient() as client:
+        with download_progress_sink("Downloading One Pace library") as progress_callback:
+            results = client.download(
+                magnets,
+                destination=args.destination,
+                progress_callback=progress_callback,
+            )
+
+    completed_magnets = {result.magnet for result in results if result.completed}
+    updated_cache = mark_downloaded(cache, completed_magnets)
+    save_cache(updated_cache)
+    report_download_results(results, destination=args.destination)
 
 
 if __name__ == "__main__":

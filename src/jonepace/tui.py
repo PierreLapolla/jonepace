@@ -2,6 +2,8 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from importlib.metadata import PackageNotFoundError, version
 
+from pathlib import Path
+
 from rich.console import Console
 from rich.prompt import Confirm
 from rich.progress import (
@@ -18,7 +20,7 @@ from rich.progress import (
 )
 from rich.text import Text
 
-from jonepace.libtorrent_wrapper import DownloadProgress, MetadataProgress
+from jonepace.libtorrent_wrapper import DownloadProgress, DownloadResult, MetadataProgress
 
 
 def _tool_version() -> str:
@@ -111,3 +113,21 @@ def download_progress_sink(description: str) -> Iterator[
             )
 
         yield update
+
+
+def report_download_results(results: list[DownloadResult], *, destination: str | Path) -> None:
+    console = Console()
+    completed = [result for result in results if result.completed]
+    failed = [result for result in results if not result.completed]
+
+    console.print()
+    console.print(f"Destination: {Path(destination).expanduser().resolve()}")
+    console.print(f"Completed: {len(completed)}/{len(results)} torrents")
+
+    if not failed:
+        return
+
+    console.print("Failed torrents:", style="bold red")
+    for result in failed:
+        label = result.name or result.info_hash
+        console.print(f" - {label}: {result.error or 'unknown error'}")
