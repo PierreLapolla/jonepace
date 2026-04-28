@@ -20,3 +20,14 @@ Use the following command to start the download:
 uvx jonepace
 ```
 
+## Contributing
+
+This repo highly encourages contribution to maintain the list of torrent links updated.
+
+- Fork this repo
+- Update the [releases file](releases.csv), do not fill the size column
+- Run 
+```bash 
+uv run -m jonepace --maintainance
+```
+- Create and submit a PR

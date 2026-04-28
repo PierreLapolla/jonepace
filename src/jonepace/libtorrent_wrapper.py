@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import shutil
 import tempfile
 import time
@@ -80,11 +78,11 @@ class LibtorrentMagnetClient:
     """Standalone high-throughput helper for magnet metadata and downloads."""
 
     def __init__(
-        self,
-        *,
-        listen_interfaces: str = DEFAULT_LISTEN_INTERFACES,
-        poll_interval: float = DEFAULT_POLL_INTERVAL,
-        alert_queue_size: int = 10000,
+            self,
+            *,
+            listen_interfaces: str = DEFAULT_LISTEN_INTERFACES,
+            poll_interval: float = DEFAULT_POLL_INTERVAL,
+            alert_queue_size: int = 10000,
     ) -> None:
         if poll_interval <= 0:
             raise ValueError("poll_interval must be greater than 0")
@@ -101,7 +99,7 @@ class LibtorrentMagnetClient:
             self._session = None
         shutil.rmtree(self._metadata_dir, ignore_errors=True)
 
-    def __enter__(self) -> LibtorrentMagnetClient:
+    def __enter__(self):
         return self
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
@@ -147,12 +145,12 @@ class LibtorrentMagnetClient:
         return info_hash
 
     def fetch_metadata(
-        self,
-        magnets: Iterable[str],
-        *,
-        timeout: float = 90.0,
-        max_parallel: int = 200,
-        progress_callback: Callable[[MetadataProgress], None] | None = None,
+            self,
+            magnets: Iterable[str],
+            *,
+            timeout: float = 90.0,
+            max_parallel: int = 200,
+            progress_callback: Callable[[MetadataProgress], None] | None = None,
     ) -> list[MagnetMetadata]:
         jobs = self._prepare_jobs(magnets, self._metadata_dir, metadata_only=True)
         if not jobs:
@@ -169,15 +167,15 @@ class LibtorrentMagnetClient:
         return [job.metadata for job in jobs if job.metadata is not None]
 
     def download(
-        self,
-        magnets: Iterable[str],
-        *,
-        destination: str | Path,
-        timeout: float | None = None,
-        metadata_timeout: float = 120.0,
-        max_parallel: int = 8,
-        progress_callback: Callable[[DownloadProgress], None] | None = None,
-        completion_callback: Callable[[DownloadResult], None] | None = None,
+            self,
+            magnets: Iterable[str],
+            *,
+            destination: str | Path,
+            timeout: float | None = None,
+            metadata_timeout: float = 120.0,
+            max_parallel: int = 8,
+            progress_callback: Callable[[DownloadProgress], None] | None = None,
+            completion_callback: Callable[[DownloadResult], None] | None = None,
     ) -> list[DownloadResult]:
         destination_path = Path(destination).expanduser().resolve()
         destination_path.mkdir(parents=True, exist_ok=True)
@@ -203,13 +201,14 @@ class LibtorrentMagnetClient:
         return results
 
     def _prepare_jobs(
-        self,
-        magnets: Iterable[str],
-        destination: Path,
-        *,
-        metadata_only: bool,
+            self,
+            magnets: Iterable[str],
+            destination: Path,
+            *,
+            metadata_only: bool,
     ) -> list[_Job]:
-        ordered_unique: list[str] = list(dict.fromkeys(str(magnet).strip() for magnet in magnets if str(magnet).strip()))
+        ordered_unique: list[str] = list(
+            dict.fromkeys(str(magnet).strip() for magnet in magnets if str(magnet).strip()))
         jobs: list[_Job] = []
         for magnet in ordered_unique:
             info_hash = self.info_hash_from_magnet(magnet)
@@ -270,14 +269,14 @@ class LibtorrentMagnetClient:
         }
 
     def _run_jobs(
-        self,
-        jobs: list[_Job],
-        *,
-        max_parallel: int,
-        timeout: float | None,
-        metadata_timeout: float,
-        metadata_progress_callback: Callable[[MetadataProgress], None] | None,
-        download_progress_callback: Callable[[DownloadProgress], None] | None,
+            self,
+            jobs: list[_Job],
+            *,
+            max_parallel: int,
+            timeout: float | None,
+            metadata_timeout: float,
+            metadata_progress_callback: Callable[[MetadataProgress], None] | None,
+            download_progress_callback: Callable[[DownloadProgress], None] | None,
     ) -> None:
         if max_parallel < 1:
             raise ValueError("max_parallel must be at least 1")
@@ -347,7 +346,8 @@ class LibtorrentMagnetClient:
                     finished.append(handle)
 
             if metadata_progress_callback is not None:
-                fetched = sum(1 for job in jobs if job.metadata is not None and (job.metadata.ok or job.metadata.error is not None))
+                fetched = sum(1 for job in jobs if
+                              job.metadata is not None and (job.metadata.ok or job.metadata.error is not None))
                 if fetched != metadata_reported:
                     metadata_reported = fetched
                     metadata_progress_callback(MetadataProgress(fetched=fetched, total=len(jobs)))
@@ -420,9 +420,9 @@ class LibtorrentMagnetClient:
             job.result.total_size = max(job.result.total_size, job.metadata.total_size or 0)
 
     def _build_download_progress(
-        self,
-        jobs: list[_Job],
-        active: dict[lt.torrent_handle, _Job],
+            self,
+            jobs: list[_Job],
+            active: dict[lt.torrent_handle, _Job],
     ) -> DownloadProgress:
         total_rate = 0
         total_peers = 0

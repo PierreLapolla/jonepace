@@ -6,6 +6,7 @@ from jonepace.tui import metadata_progress_sink
 from pedros import get_logger
 
 logger = get_logger()
+BYTES_PER_GB = 1000 ** 3
 
 
 def load_csv(path: Path) -> pd.DataFrame:
@@ -62,7 +63,7 @@ def fetch_magnet_metadata(magnets: list[str]) -> dict[str, dict]:
 def add_size_column(dataframe: pd.DataFrame) -> pd.DataFrame:
     def log_total_size() -> None:
         total_size = int(dataframe["size"].fillna(0).sum())
-        logger.info(f"Combined size: {total_size} bytes ({total_size / 1024**3:.2f} GiB)")
+        logger.info(f"Combined size: {total_size} bytes ({total_size / BYTES_PER_GB:.2f} GB)")
 
     if "size" not in dataframe.columns:
         dataframe["size"] = pd.Series([pd.NA] * len(dataframe), dtype="Int64")
@@ -102,13 +103,9 @@ def save_csv(path: Path, dataframe: pd.DataFrame) -> None:
     logger.info(f"Saved csv to {path}")
 
 
-def main() -> None:
-    csv_path = Path(__file__).with_name("releases.csv")
+def maintain() -> None:
+    csv_path = Path(__file__).parent.parent.with_name("releases.csv")
     dataframe = load_csv(csv_path)
     dataframe = validate_magnets(dataframe)
     dataframe = add_size_column(dataframe)
     save_csv(csv_path, dataframe)
-
-
-if __name__ == "__main__":
-    main()

@@ -1,18 +1,16 @@
-from __future__ import annotations
-
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from importlib.metadata import PackageNotFoundError, version
 
-from rich.align import Align
-from rich.console import Console, Group
-from rich.panel import Panel
+from rich.console import Console
+from rich.prompt import Confirm
 from rich.progress import (
     BarColumn,
     DownloadColumn,
     MofNCompleteColumn,
     Progress,
     ProgressColumn,
+    SpinnerColumn,
     TaskProgressColumn,
     TextColumn,
     TimeRemainingColumn,
@@ -21,15 +19,6 @@ from rich.progress import (
 from rich.text import Text
 
 from jonepace.libtorrent_wrapper import DownloadProgress, MetadataProgress
-
-TOOL_NAME = "JONEPACE"
-TITLE_ART = r"""
-     __  ____  _   _____________  ___   ________
-    / / / __ \/ | / / ____/ __ \/   | / ____/ /
-   / / / / / /  |/ / __/ / /_/ / /| |/ /   / / 
-  / /_/ /_/ / /|  / /___/ ____/ ___ / /___/ /___
-  \____/\____/_/ |_/_____/_/   /_/  |_\____/_____/
-""".strip("\n")
 
 
 def _tool_version() -> str:
@@ -41,24 +30,24 @@ def _tool_version() -> str:
 
 def welcome() -> None:
     console = Console()
-    title = Text(TITLE_ART, style="bold cyan")
-    subtitle = Text(f"v{_tool_version()}", style="bold white")
+    name = Text("JONEPACE", style="bold white")
+    subtitle = Text(f"Version {_tool_version()}", style="dim")
 
-    body = Group(
-        Align.center(title),
-        Text(""),
-        Align.center(subtitle),
+    console.print()
+    console.print(name)
+    console.print(subtitle)
+    console.print()
+
+
+def confirm_download(total_size_bytes: int, count: int) -> bool:
+    console = Console()
+    total_size_gb = total_size_bytes / 1000 ** 3
+    return Confirm.ask(
+        f"Download {count} torrents for {total_size_gb:.2f} GB?",
+        console=console,
+        default=True,
     )
 
-    console.print(
-        Panel(
-            body,
-            title=TOOL_NAME,
-            title_align="center",
-            border_style="bright_blue",
-            padding=(1, 3),
-        )
-    )
 
 class PeersCountColumn(ProgressColumn):
     def render(self, task: "Task") -> Text:
@@ -70,9 +59,10 @@ class PeersCountColumn(ProgressColumn):
 
 
 @contextmanager
-def metadata_progress_sink(description: str = "Fetching torrent metadata") -> Iterator[
+def metadata_progress_sink(description: str) -> Iterator[
     Callable[[MetadataProgress], None]]:
     with Progress(
+            SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
             TaskProgressColumn(),
@@ -88,15 +78,16 @@ def metadata_progress_sink(description: str = "Fetching torrent metadata") -> It
 
 
 @contextmanager
-def download_progress_sink(description: str = "Downloading torrents") -> Iterator[
+def download_progress_sink(description: str) -> Iterator[
     Callable[[DownloadProgress], None]]:
     last_downloaded = 0
 
     with Progress(
+            SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
             TaskProgressColumn(),
-            DownloadColumn(binary_units=True),
+            DownloadColumn(binary_units=False),
             TransferSpeedColumn(),
             PeersCountColumn(),
             TimeRemainingColumn(elapsed_when_finished=True),
