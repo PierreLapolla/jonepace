@@ -71,7 +71,7 @@ class _Job:
     metadata_only: bool
     metadata: MagnetMetadata | None = None
     result: DownloadResult | None = None
-    added_at: float = field(default_factory=time.monotonic)
+    added_at: float | None = None
     metadata_at: float | None = None
 
 
@@ -317,6 +317,7 @@ class LibtorrentMagnetClient:
             if job.metadata_only:
                 params.flags |= lt.torrent_flags.upload_mode
             handle = session.add_torrent(params)
+            job.added_at = time.monotonic()
             active[handle] = job
             return True
 
@@ -357,7 +358,11 @@ class LibtorrentMagnetClient:
                     finished.append(handle)
                     continue
 
-                if job.metadata_at is None and (now - job.added_at) >= metadata_timeout:
+                if (
+                    job.added_at is not None
+                    and job.metadata_at is None
+                    and (now - job.added_at) >= metadata_timeout
+                ):
                     self._mark_timeout(job, "metadata timeout")
                     finished.append(handle)
 
