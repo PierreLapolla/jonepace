@@ -162,6 +162,7 @@ class LibtorrentMagnetClient:
             max_parallel=max_parallel,
             timeout=timeout,
             metadata_timeout=timeout,
+            download_rate_limit=0,
             metadata_progress_callback=progress_callback,
             download_progress_callback=None,
         )
@@ -172,6 +173,7 @@ class LibtorrentMagnetClient:
             magnets: Iterable[str],
             *,
             destination: str | Path,
+            download_rate_limit: int = 0,
             expected_sizes: Mapping[str, int] | None = None,
             timeout: float | None = None,
             metadata_timeout: float = 120.0,
@@ -196,6 +198,7 @@ class LibtorrentMagnetClient:
             max_parallel=max_parallel,
             timeout=timeout,
             metadata_timeout=metadata_timeout,
+            download_rate_limit=download_rate_limit,
             metadata_progress_callback=None,
             download_progress_callback=progress_callback,
         )
@@ -252,8 +255,6 @@ class LibtorrentMagnetClient:
         else:
             self._session.apply_settings(settings)
 
-        self._session.set_download_rate_limit(0)
-        self._session.set_local_download_rate_limit(0)
         return self._session
 
     def _build_session_settings(self, *, max_parallel: int) -> dict[str, int | str | bool]:
@@ -291,13 +292,18 @@ class LibtorrentMagnetClient:
             max_parallel: int,
             timeout: float | None,
             metadata_timeout: float,
+            download_rate_limit: int,
             metadata_progress_callback: Callable[[MetadataProgress], None] | None,
             download_progress_callback: Callable[[DownloadProgress], None] | None,
     ) -> None:
         if max_parallel < 1:
             raise ValueError("max_parallel must be at least 1")
+        if download_rate_limit < 0:
+            raise ValueError("download_rate_limit must be non-negative")
 
         session = self._ensure_session(max_parallel=max_parallel)
+        session.set_download_rate_limit(download_rate_limit)
+        session.set_local_download_rate_limit(download_rate_limit)
         pending = iter(jobs)
         active: dict[lt.torrent_handle, _Job] = {}
         deadline = None if timeout is None else time.monotonic() + timeout

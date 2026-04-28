@@ -10,6 +10,47 @@ from jonepace.tui import confirm_download, download_progress_sink, report_downlo
 from requests import get
 
 LOGGER = get_logger()
+RATE_UNITS = {
+    "b": 1,
+    "kb": 1000,
+    "mb": 1000 ** 2,
+    "gb": 1000 ** 3,
+}
+
+
+def parse_rate_limit(value: str) -> int:
+    raw = value.strip().lower()
+    if not raw:
+        raise argparse.ArgumentTypeError("download rate limit cannot be empty")
+
+    if raw == "0":
+        return 0
+
+    split_index = next((index for index, char in enumerate(raw) if not (char.isdigit() or char == ".")), len(raw))
+    number = raw[:split_index]
+    unit = raw[split_index:].strip() or "b"
+
+    if not number:
+        raise argparse.ArgumentTypeError(
+            "download rate limit must start with a number, for example 20MB"
+        )
+
+    try:
+        numeric_value = float(number)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "download rate limit must be a number optionally followed by B, KB, MB, or GB"
+        ) from exc
+
+    if numeric_value < 0:
+        raise argparse.ArgumentTypeError("download rate limit must be non-negative")
+
+    if unit not in RATE_UNITS:
+        raise argparse.ArgumentTypeError(
+            "download rate limit unit must be one of B, KB, MB, or GB"
+        )
+
+    return int(numeric_value * RATE_UNITS[unit])
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -24,6 +65,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=Path.cwd(),
         help="directory where torrents will be downloaded (default: current working directory)",
+    )
+    parser.add_argument(
+        "--download-rate-limit",
+        type=parse_rate_limit,
+        default=0,
+        metavar="RATE",
+        help="cap aggregate download speed; accepts B, KB, MB, or GB suffixes, 0 disables the limit",
     )
     return parser.parse_args(argv)
 
@@ -137,6 +185,7 @@ def main(argv: list[str] | None = None) -> None:
             results = client.download(
                 magnets,
                 destination=args.destination,
+                download_rate_limit=args.download_rate_limit,
                 expected_sizes=expected_sizes,
                 progress_callback=progress_callback,
             )
