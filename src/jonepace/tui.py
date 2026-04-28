@@ -43,7 +43,7 @@ def confirm_download(total_size_bytes: int, count: int) -> bool:
     console = Console()
     total_size_gb = total_size_bytes / 1000 ** 3
     return Confirm.ask(
-        f"Download {count} torrents for {total_size_gb:.2f} GB?",
+        f"Download {count} torrents for estimated {total_size_gb:.2f} GB?",
         console=console,
         default=True,
     )

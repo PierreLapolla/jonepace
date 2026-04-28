@@ -22,12 +22,19 @@ uvx jonepace
 
 ## Contributing
 
-This repo highly encourages contribution to maintain the list of torrent links updated.
+Contributions are welcome, especially updates to the torrent list.
 
-- Fork this repo
-- Update the [releases file](releases.csv), do not fill the size column
-- Run 
-```bash 
+If you want to add or fix releases:
+
+1. Fork the repository.
+2. Update [releases.csv](releases.csv).
+3. Leave the `size` column empty for new or changed rows.
+4. Run:
+
+```bash
 uv run -m jonepace --maintainance
 ```
-- Create and submit a PR
+
+This validates the magnet links and fills the missing sizes.
+
+5. Commit the updated `releases.csv` and open a pull request.
