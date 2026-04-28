@@ -1,221 +1,486 @@
 from __future__ import annotations
 
+import shutil
+import tempfile
+import time
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass, field
 from pathlib import Path
-import re
-from time import sleep
-from urllib.parse import parse_qs, unquote_plus, urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import libtorrent as lt
 
-from jonepace import LOGGER
-from jonepace.torrent_task import TorrentTask
-from jonepace.torrent_tui import TorrentProgressTUI
+BTIH_LENGTHS = {32, 40}
+DEFAULT_POLL_INTERVAL = 0.2
+DEFAULT_LISTEN_INTERFACES = "0.0.0.0:6881,[::]:6881"
+DEFAULT_CONNECTIONS_PER_TORRENT = 80
 
 
-class TorrentClient:
-    """Small libtorrent wrapper with queueing and Rich TUI updates."""
+@dataclass(slots=True)
+class MagnetMetadata:
+    magnet: str
+    info_hash: str
+    name: str | None = None
+    total_size: int | None = None
+    files: list[dict[str, int | str]] | None = None
+    error: str | None = None
+    timed_out: bool = False
+
+    @property
+    def ok(self) -> bool:
+        return self.error is None and self.total_size is not None
+
+
+@dataclass(slots=True)
+class DownloadResult:
+    magnet: str
+    info_hash: str
+    destination: Path
+    name: str | None = None
+    total_size: int = 0
+    downloaded: int = 0
+    progress: float = 0.0
+    peers: int = 0
+    completed: bool = False
+    timed_out: bool = False
+    error: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.completed and self.error is None
+
+
+@dataclass(slots=True)
+class MetadataProgress:
+    fetched: int
+    total: int
+
+
+@dataclass(slots=True)
+class DownloadProgress:
+    download_rate: int
+    downloaded: int
+    total_size: int
+    peers: int
+
+
+@dataclass(slots=True)
+class _Job:
+    magnet: str
+    info_hash: str
+    destination: Path
+    metadata_only: bool
+    metadata: MagnetMetadata | None = None
+    result: DownloadResult | None = None
+    added_at: float = field(default_factory=time.monotonic)
+    metadata_at: float | None = None
+
+
+class LibtorrentMagnetClient:
+    """Standalone high-throughput helper for magnet metadata and downloads."""
 
     def __init__(
         self,
         *,
-        max_concurrent: int = 1,
-        poll_interval: float = 0.5,
-        refresh_per_second: int = 12,
-        listen_interfaces: str = "0.0.0.0:6881",
-        on_torrent_completed: Callable[[TorrentTask], None] | None = None,
+        listen_interfaces: str = DEFAULT_LISTEN_INTERFACES,
+        poll_interval: float = DEFAULT_POLL_INTERVAL,
+        alert_queue_size: int = 10000,
     ) -> None:
-        if max_concurrent < 1:
-            raise ValueError("max_concurrent must be at least 1")
         if poll_interval <= 0:
             raise ValueError("poll_interval must be greater than 0")
 
-        self.max_concurrent = max_concurrent
-        self.poll_interval = poll_interval
         self.listen_interfaces = listen_interfaces
-        self.on_torrent_completed = on_torrent_completed
-
+        self.poll_interval = poll_interval
+        self.alert_queue_size = alert_queue_size
+        self._metadata_dir = Path(tempfile.mkdtemp(prefix="lt-metadata-"))
         self._session: lt.session | None = None
-        self._tui = TorrentProgressTUI(
-            refresh_per_second=refresh_per_second,
+
+    def close(self) -> None:
+        if self._session is not None:
+            self._session.pause()
+            self._session = None
+        shutil.rmtree(self._metadata_dir, ignore_errors=True)
+
+    def __enter__(self) -> LibtorrentMagnetClient:
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        self.close()
+
+    @staticmethod
+    def validate_magnet(magnet: object) -> bool:
+        if magnet is None:
+            return False
+
+        raw = str(magnet).strip()
+        if not raw:
+            return False
+
+        parsed = urlsplit(raw)
+        if parsed.scheme != "magnet":
+            return False
+
+        xt_values = parse_qs(parsed.query).get("xt", [])
+        btih = next(
+            (
+                value.rsplit(":", maxsplit=1)[-1]
+                for value in xt_values
+                if value.startswith("urn:btih:")
+            ),
+            None,
         )
-        self._tasks: list[TorrentTask] = []
-        self._task_index: dict[str, TorrentTask] = {}
-        self._handles: dict[str, lt.torrent_handle] = {}
-        self._active_ids: set[str] = set()
-        self._seen_tracker_alerts: set[str] = set()
+        return bool(btih and len(btih) in BTIH_LENGTHS)
 
-    def add(self, *, magnet_link: str, destination: str | Path) -> str:
-        torrent_id, name = self._parse_magnet_link(magnet_link)
-        if torrent_id in self._task_index:
-            raise ValueError(f"Torrent already queued: {torrent_id}")
-
-        torrent = TorrentTask(
-            torrent_id=torrent_id,
-            magnet_link=magnet_link.strip(),
-            destination=Path(destination).expanduser(),
-            name=name,
+    @staticmethod
+    def info_hash_from_magnet(magnet: str) -> str:
+        xt_values = parse_qs(urlsplit(magnet.strip()).query).get("xt", [])
+        info_hash = next(
+            (
+                value.rsplit(":", maxsplit=1)[-1].lower()
+                for value in xt_values
+                if value.startswith("urn:btih:")
+            ),
+            None,
         )
-        self._tasks.append(torrent)
-        self._task_index[torrent_id] = torrent
-        return torrent_id
+        if info_hash is None:
+            raise ValueError(f"Invalid magnet link: {magnet}")
+        return info_hash
 
-    def extend(self, magnet_links: Iterable[str], *, destination: str | Path) -> None:
-        for magnet_link in magnet_links:
-            self.add(magnet_link=magnet_link, destination=destination)
+    def fetch_metadata(
+        self,
+        magnets: Iterable[str],
+        *,
+        timeout: float = 90.0,
+        max_parallel: int = 200,
+        progress_callback: Callable[[MetadataProgress], None] | None = None,
+    ) -> list[MagnetMetadata]:
+        jobs = self._prepare_jobs(magnets, self._metadata_dir, metadata_only=True)
+        if not jobs:
+            return []
 
-    def run(self) -> None:
-        if not self._tasks:
-            LOGGER.warning("No torrents queued.")
-            return
+        self._run_jobs(
+            jobs,
+            max_parallel=max_parallel,
+            timeout=timeout,
+            metadata_timeout=timeout,
+            metadata_progress_callback=progress_callback,
+            download_progress_callback=None,
+        )
+        return [job.metadata for job in jobs if job.metadata is not None]
 
-        session = self._ensure_session()
+    def download(
+        self,
+        magnets: Iterable[str],
+        *,
+        destination: str | Path,
+        timeout: float | None = None,
+        metadata_timeout: float = 120.0,
+        max_parallel: int = 8,
+        progress_callback: Callable[[DownloadProgress], None] | None = None,
+        completion_callback: Callable[[DownloadResult], None] | None = None,
+    ) -> list[DownloadResult]:
+        destination_path = Path(destination).expanduser().resolve()
+        destination_path.mkdir(parents=True, exist_ok=True)
 
-        try:
-            with self._tui:
-                self._attach_torrents(session)
-                self._resume_waiting_torrents()
-                while not self._all_completed():
-                    session.post_torrent_updates()
-                    sleep(self.poll_interval)
-                    self._drain_alerts()
-                    self._resume_waiting_torrents()
-        finally:
-            session.pause()
+        jobs = self._prepare_jobs(magnets, destination_path, metadata_only=False)
+        if not jobs:
+            return []
 
-    def _ensure_session(self) -> lt.session:
-        if self._session is None:
-            self._session = lt.session(
-                {
-                    "listen_interfaces": self.listen_interfaces,
-                    "alert_mask": int(
-                        lt.alert.category_t.error_notification
-                        | lt.alert.category_t.status_notification
-                        | lt.alert.category_t.storage_notification
+        self._run_jobs(
+            jobs,
+            max_parallel=max_parallel,
+            timeout=timeout,
+            metadata_timeout=metadata_timeout,
+            metadata_progress_callback=None,
+            download_progress_callback=progress_callback,
+        )
+
+        results = [job.result for job in jobs if job.result is not None]
+        if completion_callback is not None:
+            for result in results:
+                if result.completed:
+                    completion_callback(result)
+        return results
+
+    def _prepare_jobs(
+        self,
+        magnets: Iterable[str],
+        destination: Path,
+        *,
+        metadata_only: bool,
+    ) -> list[_Job]:
+        ordered_unique: list[str] = list(dict.fromkeys(str(magnet).strip() for magnet in magnets if str(magnet).strip()))
+        jobs: list[_Job] = []
+        for magnet in ordered_unique:
+            info_hash = self.info_hash_from_magnet(magnet)
+            jobs.append(
+                _Job(
+                    magnet=magnet,
+                    info_hash=info_hash,
+                    destination=destination,
+                    metadata_only=metadata_only,
+                    metadata=MagnetMetadata(magnet=magnet, info_hash=info_hash),
+                    result=DownloadResult(
+                        magnet=magnet,
+                        info_hash=info_hash,
+                        destination=destination,
                     ),
-                }
+                )
             )
-            self._session.apply_settings(
-                {
-                    "alert_queue_size": 10000,
-                    "active_limit": self.max_concurrent,
-                    "active_downloads": self.max_concurrent,
-                    "active_seeds": 0,
-                }
-            )
-            self._session.set_download_rate_limit(0)
-            self._session.set_upload_rate_limit(0)
-            self._session.set_local_download_rate_limit(0)
-            self._session.set_local_upload_rate_limit(0)
-            self._session.set_max_connections(0)
-            self._session.set_max_half_open_connections(0)
+        return jobs
+
+    def _ensure_session(self, *, max_parallel: int) -> lt.session:
+        settings = self._build_session_settings(max_parallel=max_parallel)
+        if self._session is None:
+            self._session = lt.session(settings)
             self._start_network_services(self._session)
+        else:
+            self._session.apply_settings(settings)
+
+        self._session.set_download_rate_limit(0)
+        self._session.set_local_download_rate_limit(0)
         return self._session
 
-    def _attach_torrents(self, session: lt.session) -> None:
-        for torrent in self._tasks:
-            if torrent.torrent_id in self._handles:
-                continue
+    def _build_session_settings(self, *, max_parallel: int) -> dict[str, int | str | bool]:
+        connections_limit = max(1000, max_parallel * DEFAULT_CONNECTIONS_PER_TORRENT)
+        return {
+            "listen_interfaces": self.listen_interfaces,
+            "enable_dht": True,
+            "enable_lsd": True,
+            "enable_upnp": True,
+            "enable_natpmp": True,
+            "alert_mask": int(
+                lt.alert.category_t.error_notification
+                | lt.alert.category_t.status_notification
+                | lt.alert.category_t.storage_notification
+                | lt.alert.category_t.performance_warning
+                | lt.alert.category_t.tracker_notification
+            ),
+            "alert_queue_size": self.alert_queue_size,
+            "connection_speed": 200,
+            "connections_limit": connections_limit,
+            "active_limit": max_parallel,
+            "active_downloads": max_parallel,
+            "active_seeds": 0,
+            "active_checking": max_parallel,
+            "max_queued_disk_bytes": 16 * 1024 * 1024,
+            "unchoke_slots_limit": 0,
+            "num_optimistic_unchoke_slots": 0,
+            "seeding_outgoing_connections": False,
+        }
 
-            torrent.destination.mkdir(parents=True, exist_ok=True)
-            params = lt.parse_magnet_uri(torrent.magnet_link)
-            params.save_path = str(torrent.destination)
-            params.flags |= lt.torrent_flags.paused
+    def _run_jobs(
+        self,
+        jobs: list[_Job],
+        *,
+        max_parallel: int,
+        timeout: float | None,
+        metadata_timeout: float,
+        metadata_progress_callback: Callable[[MetadataProgress], None] | None,
+        download_progress_callback: Callable[[DownloadProgress], None] | None,
+    ) -> None:
+        if max_parallel < 1:
+            raise ValueError("max_parallel must be at least 1")
+
+        session = self._ensure_session(max_parallel=max_parallel)
+        pending = iter(jobs)
+        active: dict[lt.torrent_handle, _Job] = {}
+        deadline = None if timeout is None else time.monotonic() + timeout
+        metadata_reported = -1
+
+        def add_next() -> bool:
+            try:
+                job = next(pending)
+            except StopIteration:
+                return False
+
+            params = lt.parse_magnet_uri(job.magnet)
+            params.save_path = str(job.destination)
             params.flags |= lt.torrent_flags.duplicate_is_error
-            params.flags &= ~lt.torrent_flags.auto_managed
-            self._handles[torrent.torrent_id] = session.add_torrent(params)
+            params.max_uploads = 0
+            params.upload_limit = 0
+            if job.metadata_only:
+                params.flags |= lt.torrent_flags.upload_mode
+            handle = session.add_torrent(params)
+            active[handle] = job
+            return True
 
-    def _resume_waiting_torrents(self) -> None:
-        active_count = sum(
-            1
-            for torrent in self._tasks
-            if torrent.state == "active"
+        for _ in range(min(max_parallel, len(jobs))):
+            add_next()
+
+        while active:
+            session.post_torrent_updates()
+            for alert in session.pop_alerts():
+                self._handle_alert(alert, active)
+
+            finished: list[lt.torrent_handle] = []
+            now = time.monotonic()
+
+            for handle, job in list(active.items()):
+                status = handle.status()
+                self._sync_job_from_status(job, status)
+
+                if status.errc.value():
+                    self._mark_error(job, status.errc.message())
+                    finished.append(handle)
+                    continue
+
+                if job.metadata is not None and job.metadata.total_size is None and status.has_metadata:
+                    self._fill_metadata(job, handle)
+
+                if job.metadata_only and job.metadata is not None and job.metadata.ok:
+                    finished.append(handle)
+                    continue
+
+                if not job.metadata_only and self._is_finished(status):
+                    self._mark_completed(job)
+                    finished.append(handle)
+                    continue
+
+                if deadline is not None and now >= deadline:
+                    self._mark_timeout(job, "overall timeout")
+                    finished.append(handle)
+                    continue
+
+                if job.metadata_at is None and (now - job.added_at) >= metadata_timeout:
+                    self._mark_timeout(job, "metadata timeout")
+                    finished.append(handle)
+
+            if metadata_progress_callback is not None:
+                fetched = sum(1 for job in jobs if job.metadata is not None and (job.metadata.ok or job.metadata.error is not None))
+                if fetched != metadata_reported:
+                    metadata_reported = fetched
+                    metadata_progress_callback(MetadataProgress(fetched=fetched, total=len(jobs)))
+
+            if download_progress_callback is not None and any(not job.metadata_only for job in jobs):
+                download_progress_callback(self._build_download_progress(jobs, active))
+
+            for handle in finished:
+                self._remove_handle(session, handle)
+                active.pop(handle, None)
+                add_next()
+
+            if active:
+                time.sleep(self.poll_interval)
+
+    def _handle_alert(self, alert: lt.alert, active: dict[lt.torrent_handle, _Job]) -> None:
+        handle = getattr(alert, "handle", None)
+        if handle is None:
+            return
+        job = active.get(handle)
+        if job is None:
+            return
+
+        if isinstance(alert, lt.metadata_received_alert):
+            self._fill_metadata(job, handle)
+            return
+
+        if isinstance(alert, lt.torrent_error_alert):
+            self._mark_error(job, alert.error.message())
+            return
+
+        if isinstance(alert, lt.add_torrent_alert) and alert.error.value():
+            self._mark_error(job, alert.error.message())
+
+    def _sync_job_from_status(self, job: _Job, status: lt.torrent_status) -> None:
+        if job.result is None:
+            return
+
+        job.result.name = str(status.name or job.result.name or "")
+        job.result.total_size = max(int(status.total_wanted), job.result.total_size)
+        job.result.downloaded = max(int(status.total_wanted_done), job.result.downloaded)
+        job.result.peers = max(int(status.num_peers), 0)
+        if job.result.total_size > 0:
+            job.result.progress = min(1.0, job.result.downloaded / job.result.total_size)
+        elif status.progress >= 0:
+            job.result.progress = float(status.progress)
+
+    def _fill_metadata(self, job: _Job, handle: lt.torrent_handle) -> None:
+        if job.metadata is None:
+            return
+
+        info = handle.torrent_file()
+        if info is None:
+            return
+
+        files = info.files()
+        job.metadata.name = info.name()
+        job.metadata.total_size = info.total_size()
+        job.metadata.files = [
+            {
+                "path": files.file_path(index),
+                "size": files.file_size(index),
+            }
+            for index in range(files.num_files())
+        ]
+        job.metadata_at = time.monotonic()
+
+        if job.result is not None:
+            job.result.name = job.metadata.name
+            job.result.total_size = max(job.result.total_size, job.metadata.total_size or 0)
+
+    def _build_download_progress(
+        self,
+        jobs: list[_Job],
+        active: dict[lt.torrent_handle, _Job],
+    ) -> DownloadProgress:
+        total_rate = 0
+        total_peers = 0
+        total_downloaded = 0
+
+        for handle, job in active.items():
+            if job.metadata_only:
+                continue
+
+            status = handle.status()
+            total_rate += max(int(status.download_rate), 0)
+            total_peers += max(int(status.num_peers), 0)
+
+        for job in jobs:
+            if job.metadata_only or job.result is None:
+                continue
+            total_downloaded += max(int(job.result.downloaded), 0)
+
+        return DownloadProgress(
+            download_rate=total_rate,
+            downloaded=total_downloaded,
+            total_size=sum(
+                max(int(job.result.total_size), 0)
+                for job in jobs
+                if not job.metadata_only and job.result is not None
+            ),
+            peers=total_peers,
         )
-        if active_count >= self.max_concurrent:
+
+    def _mark_completed(self, job: _Job) -> None:
+        if job.result is None:
             return
 
-        for torrent in self._tasks:
-            if active_count >= self.max_concurrent:
-                break
-            if torrent.state != "queued":
-                continue
+        if job.metadata is not None and not job.metadata.ok:
+            job.metadata.error = None
+            job.metadata.timed_out = False
+            job.metadata_at = job.metadata_at or time.monotonic()
+        job.result.completed = True
+        job.result.progress = 1.0
+        job.result.downloaded = max(job.result.downloaded, job.result.total_size)
 
-            handle = self._handles.get(torrent.torrent_id)
-            if handle is None or not handle.is_valid():
-                continue
+    def _mark_timeout(self, job: _Job, message: str) -> None:
+        if job.metadata is not None and job.metadata.total_size is None and job.metadata.error is None:
+            job.metadata.timed_out = True
+            job.metadata.error = message
+        if job.result is not None and not job.result.completed and job.result.error is None:
+            job.result.timed_out = True
+            job.result.error = message
 
-            self._active_ids.add(torrent.torrent_id)
-            torrent.state = "active"
-            handle.resume()
-            active_count += 1
-            self._tui.sync(torrent)
-            # LOGGER.info("Resumed torrent: %s", torrent.name)
+    def _mark_error(self, job: _Job, message: str) -> None:
+        if job.metadata is not None and job.metadata.total_size is None and job.metadata.error is None:
+            job.metadata.error = message
+        if job.result is not None and job.result.error is None:
+            job.result.error = message
 
-    def _drain_alerts(self) -> None:
-        session = self._session
-        if session is None:
-            return
-
-        for alert in session.pop_alerts():
-            if isinstance(alert, lt.state_update_alert):
-                self._handle_state_update(alert)
-                continue
-
-            if isinstance(alert, lt.add_torrent_alert) and alert.error.value() != 0:
-                LOGGER.error(alert.message())
-                continue
-
-            if isinstance(alert, (lt.tracker_error_alert, lt.tracker_warning_alert)):
-                self._log_tracker_alert(alert)
-                continue
-
-            alert_name = type(alert).__name__.lower()
-            if "error" in alert_name or "fail" in alert_name:
-                LOGGER.error(alert.message())
-
-    def _all_completed(self) -> bool:
-        return all(torrent.state == "completed" for torrent in self._tasks)
-
-    def _handle_state_update(self, alert: lt.state_update_alert) -> None:
-        for status in alert.status:
-            torrent_id = self._resolve_torrent_id(status)
-            task = self._task_index.get(torrent_id)
-            if task is None:
-                continue
-
-            was_completed = task.state == "completed"
-            self._update_task_from_status(task, status)
-            self._tui.sync(task)
-
-            if not was_completed and task.state == "completed":
-                self._active_ids.discard(task.torrent_id)
-                handle = self._handles.get(task.torrent_id)
-                if handle is not None and handle.is_valid():
-                    handle.pause()
-                    session = self._session
-                    if session is not None:
-                        session.remove_torrent(handle)
-                self._handles.pop(task.torrent_id, None)
-                if self.on_torrent_completed is not None:
-                    try:
-                        self.on_torrent_completed(task)
-                    except Exception:
-                        LOGGER.exception(f"Failed to persist completion state for {task.name}")
-                # LOGGER.info("Completed torrent: %s", task.name)
-
-    def _update_task_from_status(self, task: TorrentTask, status: lt.torrent_status) -> None:
-        task.name = str(status.name or task.name)
-        task.total_bytes = max(int(status.total_wanted), 0)
-        task.downloaded_bytes = max(int(status.total_wanted_done), 0)
-        task.peers = max(int(status.num_peers), 0)
-
-        if self._is_finished(status):
-            task.state = "completed"
-            self._active_ids.discard(task.torrent_id)
-        elif task.torrent_id in self._active_ids:
-            task.state = "active"
-        else:
-            task.state = "queued"
+    def _remove_handle(self, session: lt.session, handle: lt.torrent_handle) -> None:
+        if handle.is_valid():
+            session.remove_torrent(handle)
 
     def _is_finished(self, status: lt.torrent_status) -> bool:
         if bool(status.is_seeding) or bool(status.is_finished):
@@ -224,48 +489,17 @@ class TorrentClient:
         total_wanted = int(status.total_wanted)
         return total_wanted > 0 and int(status.total_wanted_done) >= total_wanted
 
-    def _parse_magnet_link(self, magnet_link: str) -> tuple[str, str]:
-        query = parse_qs(urlsplit(magnet_link.strip()).query)
-        xt_values = query.get("xt", [])
-        torrent_id = next(
-            (value.rsplit(":", maxsplit=1)[-1].lower() for value in xt_values if value.startswith("urn:btih:")),
-            None,
-        )
-        if torrent_id is None:
-            raise ValueError(f"Invalid magnet link: {magnet_link}")
-
-        raw_name = query.get("dn", [torrent_id])[0]
-        return torrent_id, unquote_plus(raw_name)
-
-    def _resolve_torrent_id(self, status: lt.torrent_status) -> str:
-        info_hashes = status.handle.info_hashes()
-        v1_hash = getattr(info_hashes, "v1", None)
-        if v1_hash:
-            return str(v1_hash)
-        return str(info_hashes)
-
-    def _log_tracker_alert(
-        self,
-        alert: lt.tracker_error_alert | lt.tracker_warning_alert,
-    ) -> None:
-        message = alert.message()
-        normalized_message = re.sub(r"\(\d+\)\s*$", "", message).strip()
-        lowered = normalized_message.lower()
-
-        if "skipping tracker announce" in lowered and "unreachable" in lowered:
-            return
-
-        if normalized_message in self._seen_tracker_alerts:
-            return
-        self._seen_tracker_alerts.add(normalized_message)
-        LOGGER.warning(normalized_message)
-
     def _start_network_services(self, session: lt.session) -> None:
         for method_name in ("start_dht", "start_lsd", "start_natpmp", "start_upnp"):
             method = getattr(session, method_name, None)
-            if method is None:
-                continue
-            method()
+            if method is not None:
+                method()
 
 
-__all__ = ["TorrentClient"]
+__all__ = [
+    "DownloadProgress",
+    "DownloadResult",
+    "LibtorrentMagnetClient",
+    "MagnetMetadata",
+    "MetadataProgress",
+]
