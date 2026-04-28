@@ -4,6 +4,7 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Mapping
 from urllib.parse import parse_qs, urlsplit
 
 import libtorrent as lt
@@ -171,6 +172,7 @@ class LibtorrentMagnetClient:
             magnets: Iterable[str],
             *,
             destination: str | Path,
+            expected_sizes: Mapping[str, int] | None = None,
             timeout: float | None = None,
             metadata_timeout: float = 120.0,
             max_parallel: int = 8,
@@ -180,7 +182,12 @@ class LibtorrentMagnetClient:
         destination_path = Path(destination).expanduser().resolve()
         destination_path.mkdir(parents=True, exist_ok=True)
 
-        jobs = self._prepare_jobs(magnets, destination_path, metadata_only=False)
+        jobs = self._prepare_jobs(
+            magnets,
+            destination_path,
+            metadata_only=False,
+            expected_sizes=expected_sizes,
+        )
         if not jobs:
             return []
 
@@ -206,23 +213,32 @@ class LibtorrentMagnetClient:
             destination: Path,
             *,
             metadata_only: bool,
+            expected_sizes: Mapping[str, int] | None = None,
     ) -> list[_Job]:
         ordered_unique: list[str] = list(
             dict.fromkeys(str(magnet).strip() for magnet in magnets if str(magnet).strip()))
         jobs: list[_Job] = []
         for magnet in ordered_unique:
             info_hash = self.info_hash_from_magnet(magnet)
+            expected_size = 0
+            if expected_sizes is not None:
+                expected_size = max(int(expected_sizes.get(magnet, 0)), 0)
             jobs.append(
                 _Job(
                     magnet=magnet,
                     info_hash=info_hash,
                     destination=destination,
                     metadata_only=metadata_only,
-                    metadata=MagnetMetadata(magnet=magnet, info_hash=info_hash),
+                    metadata=MagnetMetadata(
+                        magnet=magnet,
+                        info_hash=info_hash,
+                        total_size=expected_size or None,
+                    ),
                     result=DownloadResult(
                         magnet=magnet,
                         info_hash=info_hash,
                         destination=destination,
+                        total_size=expected_size,
                     ),
                 )
             )

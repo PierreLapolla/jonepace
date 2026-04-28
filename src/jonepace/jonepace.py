@@ -116,7 +116,13 @@ def main(argv: list[str] | None = None) -> None:
     cache = load_or_create_cache(releases)
     pending = pending_downloads(cache)
     magnets = pending["magnet"].tolist()
-    pending_size = int(pd.to_numeric(pending["size"], errors="coerce").fillna(0).sum())
+    pending_sizes = pd.to_numeric(pending["size"], errors="coerce").fillna(0)
+    pending_size = int(pending_sizes.sum())
+    expected_sizes = {
+        str(magnet).strip(): max(int(size), 0)
+        for magnet, size in zip(pending["magnet"], pending_sizes, strict=False)
+        if pd.notna(magnet) and int(size) > 0
+    }
 
     LOGGER.info(f"{len(magnets)} downloads pending")
     if not magnets:
@@ -131,6 +137,7 @@ def main(argv: list[str] | None = None) -> None:
             results = client.download(
                 magnets,
                 destination=args.destination,
+                expected_sizes=expected_sizes,
                 progress_callback=progress_callback,
             )
 

@@ -1,6 +1,6 @@
 [project]
 name = "jonepace"
-version = "2.0.1"
+version = "2.0.2"
 description = "Download the full One Pace library and official Jellyfin metadata set"
 readme = "README.md"
 license = {file = "LICENSE"}
