@@ -51,6 +51,15 @@ def confirm_download(total_size_bytes: int, count: int) -> bool:
     )
 
 
+def confirm_organize() -> bool:
+    console = Console()
+    return Confirm.ask(
+        "Organize downloaded .mkv files next to matching .nfo files?",
+        console=console,
+        default=False,
+    )
+
+
 class PeersCountColumn(ProgressColumn):
     def render(self, task: "Task") -> Text:
         peers = int(task.fields.get("peers", 0))
