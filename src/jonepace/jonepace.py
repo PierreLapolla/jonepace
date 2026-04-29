@@ -1,9 +1,9 @@
 import argparse
-from io import StringIO
 from pathlib import Path
 
-import pandas as pd
+import polars as pl
 from pedros import get_logger
+from jonepace.csv_utils import ensure_column, load_csv, load_csv_text, save_csv
 from jonepace.libtorrent_wrapper import LibtorrentMagnetClient
 from jonepace.maintainance import maintain
 from jonepace.tui import confirm_download, download_progress_sink, report_download_results, welcome
@@ -76,80 +76,81 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def get_releases() -> pd.DataFrame:
+def get_releases() -> pl.DataFrame:
     url = "https://raw.githubusercontent.com/PierreLapolla/jonepace/refs/heads/master/releases.csv"
     response = get(url, timeout=30)
     response.raise_for_status()
-    return pd.read_csv(StringIO(response.text))
+    return load_csv_text(response.text)
 
 
 def cache_path() -> Path:
     return Path.cwd() / "cache.csv"
 
 
-def _cache_dataframe(releases: pd.DataFrame) -> pd.DataFrame:
-    cache = releases.copy()
-    cache["downloaded"] = False
-    return cache
+def _cache_dataframe(releases: pl.DataFrame) -> pl.DataFrame:
+    return releases.with_columns(pl.lit(False).alias("downloaded"))
 
 
-def _valid_release_rows(releases: pd.DataFrame) -> pd.DataFrame:
-    magnet_series = releases["magnet"].fillna("").astype(str).str.strip()
-    valid_mask = magnet_series.map(LibtorrentMagnetClient.validate_magnet)
-    return releases.loc[valid_mask].copy()
+def _normalized_magnets(dataframe: pl.DataFrame) -> list[str]:
+    return [
+        magnet.strip()
+        for magnet in dataframe.get_column("magnet").cast(pl.String).fill_null("").to_list()
+    ]
 
 
-def _magnet_list(dataframe: pd.DataFrame) -> list[str]:
-    return dataframe["magnet"].fillna("").astype(str).str.strip().tolist()
+def _valid_release_rows(releases: pl.DataFrame) -> pl.DataFrame:
+    valid_mask = [LibtorrentMagnetClient.validate_magnet(magnet) for magnet in _normalized_magnets(releases)]
+    return releases.filter(pl.Series("valid_magnet", valid_mask))
 
 
-def load_or_create_cache(releases: pd.DataFrame) -> pd.DataFrame:
+def load_or_create_cache(releases: pl.DataFrame) -> pl.DataFrame:
     path = cache_path()
     valid_releases = _valid_release_rows(releases)
 
     if not path.exists():
         cache = _cache_dataframe(valid_releases)
-        cache.to_csv(path, index=False)
+        save_csv(path, cache)
         LOGGER.info(f"Created cache at {path}")
         return cache
 
-    cache = pd.read_csv(path)
-    cache_magnets = _magnet_list(cache)
-    release_magnets = _magnet_list(valid_releases)
-
-    if cache_magnets != release_magnets:
+    cache = load_csv(path)
+    if _normalized_magnets(cache) != _normalized_magnets(valid_releases):
         cache = _cache_dataframe(valid_releases)
-        cache.to_csv(path, index=False)
+        save_csv(path, cache)
         LOGGER.info(f"Invalidated cache at {path} because release magnets changed")
         return cache
 
-    if "downloaded" not in cache.columns:
-        cache["downloaded"] = False
-        cache.to_csv(path, index=False)
-
-    cache["downloaded"] = cache["downloaded"].fillna(False).astype(bool)
+    cache = ensure_column(cache, "downloaded", pl.Boolean, default_value=False).with_columns(
+        pl.col("downloaded").fill_null(False).cast(pl.Boolean, strict=False).alias("downloaded")
+    )
+    save_csv(path, cache)
     return cache
 
 
-def pending_downloads(cache: pd.DataFrame) -> pd.DataFrame:
-    pending = cache.loc[~cache["downloaded"].fillna(False).astype(bool)].copy()
-    pending["magnet"] = pending["magnet"].fillna("").astype(str).str.strip()
-    return pending.loc[pending["magnet"] != ""]
+def pending_downloads(cache: pl.DataFrame) -> pl.DataFrame:
+    normalized = cache.with_columns(
+        pl.col("downloaded").fill_null(False).cast(pl.Boolean, strict=False).alias("downloaded"),
+        pl.col("magnet").cast(pl.String).fill_null("").str.strip_chars().alias("magnet"),
+    )
+    return normalized.filter((~pl.col("downloaded")) & (pl.col("magnet") != ""))
 
 
-def mark_downloaded(cache: pd.DataFrame, completed_magnets: set[str]) -> pd.DataFrame:
+def mark_downloaded(cache: pl.DataFrame, completed_magnets: set[str]) -> pl.DataFrame:
     if not completed_magnets:
         return cache
 
-    updated = cache.copy()
-    magnet_series = updated["magnet"].fillna("").astype(str).str.strip()
-    updated.loc[magnet_series.isin(completed_magnets), "downloaded"] = True
-    return updated
+    normalized_magnets = pl.col("magnet").cast(pl.String).fill_null("").str.strip_chars()
+    return cache.with_columns(
+        pl.when(normalized_magnets.is_in(list(completed_magnets)))
+        .then(pl.lit(True))
+        .otherwise(pl.col("downloaded").fill_null(False).cast(pl.Boolean, strict=False))
+        .alias("downloaded")
+    )
 
 
-def save_cache(cache: pd.DataFrame) -> None:
+def save_cache(cache: pl.DataFrame) -> None:
     path = cache_path()
-    cache.to_csv(path, index=False)
+    save_csv(path, cache)
     LOGGER.info(f"Saved cache to {path}")
 
 
@@ -163,13 +164,13 @@ def main(argv: list[str] | None = None) -> None:
     releases = get_releases()
     cache = load_or_create_cache(releases)
     pending = pending_downloads(cache)
-    magnets = pending["magnet"].tolist()
-    pending_sizes = pd.to_numeric(pending["size"], errors="coerce").fillna(0)
+    magnets = pending.get_column("magnet").to_list()
+    pending_sizes = pending.get_column("size").cast(pl.Int64, strict=False).fill_null(0)
     pending_size = int(pending_sizes.sum())
     expected_sizes = {
-        str(magnet).strip(): max(int(size), 0)
-        for magnet, size in zip(pending["magnet"], pending_sizes, strict=False)
-        if pd.notna(magnet) and int(size) > 0
+        magnet.strip(): max(int(size), 0)
+        for magnet, size in zip(magnets, pending_sizes.to_list(), strict=False)
+        if magnet.strip() and int(size) > 0
     }
 
     LOGGER.info(f"{len(magnets)} downloads pending")

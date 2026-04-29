@@ -61,7 +61,7 @@ class PeersCountColumn(ProgressColumn):
 
 
 @contextmanager
-def metadata_progress_sink(description: str) -> Iterator[
+def metadata_progress_sink(description: str = "") -> Iterator[
     Callable[[MetadataProgress], None]]:
     with Progress(
             SpinnerColumn(),
@@ -80,7 +80,7 @@ def metadata_progress_sink(description: str) -> Iterator[
 
 
 @contextmanager
-def download_progress_sink(description: str) -> Iterator[
+def download_progress_sink(description: str = "") -> Iterator[
     Callable[[DownloadProgress], None]]:
     last_downloaded = 0
 

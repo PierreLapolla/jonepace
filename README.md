@@ -64,13 +64,13 @@ If you want to add or fix releases:
 
 1. Fork the repository.
 2. Update [releases.csv](releases.csv).
-3. Leave the `size` column empty for new or changed rows.
+3. Leave the `size` and `file_hashes` columns empty for new or changed rows.
 4. Run:
 
 ```bash
 uv run -m jonepace --maintainance
 ```
 
-This validates the magnet links and fills the missing sizes.
+This validates the magnet links and fills the missing `size` and `file_hashes` values.
 
 5. Commit the updated `releases.csv` and open a pull request.
