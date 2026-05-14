@@ -1,10 +1,10 @@
 [project]
 name = "jonepace"
-version = "2.1.0"
+version = "2.1.1"
 description = "Download the full One Pace library and official Jellyfin metadata set"
 readme = "README.md"
 license = {file = "LICENSE"}
-requires-python = ">=3.13"
+requires-python = ">=3.13,<3.14"
 authors = [
     { name = "PierreLapolla", email = "pro@pierrelapolla.com" },
 ]
@@ -29,7 +29,7 @@ dependencies = [
     "libtorrent>=2.0.11",
     "polars>=1.30.0",
     "pedros>=0.12.3",
-    "requests>=2.33.1",
+    "requests>=2.34.1",
     "rich>=15.0.0",
 ]
 
