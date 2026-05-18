@@ -9,7 +9,9 @@ CSV_SCHEMA_OVERRIDES = {
     "arc": pl.String,
     "number": pl.String,
     "magnet": pl.String,
+    "release_type": pl.String,
     "file_hashes": pl.String,
+    "quality": pl.String,
 }
 
 
@@ -60,8 +62,12 @@ def add_column(
 
         value, error = resolve_value(row)
         if value is None:
+            if error is None:
+                values.append(current_value)
+                continue
+
             if on_error is not None:
-                on_error(row_index, row, error or "unknown error")
+                on_error(row_index, row, error)
             values.append(current_value)
             continue
 

@@ -12,14 +12,44 @@ from pedros import get_logger
 logger = get_logger()
 BYTES_PER_GB = 1000 ** 3
 FILE_HASH_PATTERN = re.compile(r"\[([0-9A-Fa-f]{8})](?=\.[^.]+$)")
+RESOLUTION_QUALITY_PATTERN = re.compile(r"(?<!\d)(480|720|1080|2160)p(?!\w)", re.IGNORECASE)
+QUALITY_ALIAS_PATTERN = re.compile(r"(?<![A-Za-z0-9])(uhd|full[ ._-]?hd|fhd|hd)(?![A-Za-z0-9])", re.IGNORECASE)
+QUALITY_ALIASES = {
+    "uhd": "2160p",
+    "fullhd": "1080p",
+    "fhd": "1080p",
+    "hd": "HD",
+}
+QUALITY_ORDER = {
+    "480p": 0,
+    "720p": 1,
+    "HD": 2,
+    "1080p": 3,
+    "2160p": 4,
+}
+
+
+def row_magnet(row: dict[str, Any]) -> str:
+    return str(row.get("magnet") or "").strip()
+
+
+def has_magnet(row: dict[str, Any]) -> bool:
+    return bool(row_magnet(row))
+
+
+def is_extended_placeholder(row: dict[str, Any]) -> bool:
+    return str(row.get("release_type") or "").strip().lower() == "extended" and not has_magnet(row)
 
 
 def validate_magnets(dataframe: pl.DataFrame) -> pl.DataFrame:
     invalid_rows: list[int] = []
 
     for row_index, row in enumerate(dataframe.iter_rows(named=True)):
-        magnet_link = row.get("magnet")
-        if magnet_link is not None and LibtorrentMagnetClient.validate_magnet(magnet_link):
+        if is_extended_placeholder(row):
+            continue
+
+        magnet_link = row_magnet(row)
+        if LibtorrentMagnetClient.validate_magnet(magnet_link):
             continue
 
         invalid_rows.append(row_index)
@@ -84,6 +114,25 @@ def file_hashes_from_metadata_files(files: list[dict[str, Any]] | None) -> list[
     return hashes or None
 
 
+def qualities_from_names(names: list[str]) -> list[str]:
+    qualities: set[str] = set()
+    for name in names:
+        for match in RESOLUTION_QUALITY_PATTERN.finditer(name):
+            qualities.add(f"{match.group(1)}p")
+
+        for match in QUALITY_ALIAS_PATTERN.finditer(name):
+            alias = re.sub(r"[ ._-]+", "", match.group(1).lower())
+            qualities.add(QUALITY_ALIASES[alias])
+
+    return sorted(qualities, key=lambda quality: QUALITY_ORDER.get(quality, len(QUALITY_ORDER)))
+
+
+def qualities_from_metadata(metadata: dict[str, Any]) -> list[str] | None:
+    names = [str(metadata.get("name") or "")]
+    names.extend(str(file_info.get("path") or "") for file_info in metadata.get("files") or [])
+    return qualities_from_names(names) or None
+
+
 def parse_file_hash_list(value: object) -> list[str] | None:
     if value is None:
         return None
@@ -106,9 +155,36 @@ def parse_file_hash_list(value: object) -> list[str] | None:
     return [str(item).upper() for item in parsed]
 
 
+def parse_quality_list(value: object) -> list[str] | None:
+    if value is None:
+        return None
+
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    raw = str(value).strip()
+    if not raw:
+        return None
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        parsed = None
+
+    if isinstance(parsed, list):
+        values = [str(item).strip() for item in parsed if str(item).strip()]
+        return values or None
+
+    values = [item.strip() for item in raw.split(",") if item.strip()]
+    return values or None
+
+
 def add_size_column(dataframe: pl.DataFrame, metadata_by_magnet: dict[str, dict]) -> pl.DataFrame:
     def resolve_value(row: dict[str, Any]) -> tuple[object | None, str | None]:
-        metadata = metadata_by_magnet.get(str(row["magnet"]).strip())
+        if not has_magnet(row):
+            return None, None
+
+        metadata = metadata_by_magnet.get(row_magnet(row))
         if metadata is None:
             return None, "missing metadata"
         if metadata.get("error"):
@@ -139,7 +215,10 @@ def add_size_column(dataframe: pl.DataFrame, metadata_by_magnet: dict[str, dict]
 
 def add_file_hashes_column(dataframe: pl.DataFrame, metadata_by_magnet: dict[str, dict]) -> pl.DataFrame:
     def resolve_value(row: dict[str, Any]) -> tuple[object | None, str | None]:
-        metadata = metadata_by_magnet.get(str(row["magnet"]).strip())
+        if not has_magnet(row):
+            return None, None
+
+        metadata = metadata_by_magnet.get(row_magnet(row))
         if metadata is None:
             return None, "missing metadata"
         if metadata.get("error"):
@@ -165,19 +244,51 @@ def add_file_hashes_column(dataframe: pl.DataFrame, metadata_by_magnet: dict[str
     return updated
 
 
+def add_quality_column(dataframe: pl.DataFrame, metadata_by_magnet: dict[str, dict]) -> pl.DataFrame:
+    def resolve_value(row: dict[str, Any]) -> tuple[object | None, str | None]:
+        if not has_magnet(row):
+            return None, None
+
+        metadata = metadata_by_magnet.get(row_magnet(row))
+        if metadata is None:
+            return None, "missing metadata"
+        if metadata.get("error"):
+            return None, str(metadata["error"])
+
+        qualities = qualities_from_metadata(metadata)
+        if qualities is None:
+            return None, "could not parse quality from torrent filenames"
+        return json.dumps(qualities), None
+
+    updated = add_column(
+        dataframe,
+        column_name="quality",
+        dtype=pl.String,
+        default_value=None,
+        needs_update=lambda value: parse_quality_list(value) is None,
+        resolve_value=resolve_value,
+        on_error=lambda row_index, row, error: logger.warning(
+            f"Could not fill quality for row {row_index} arc='{row['arc']}' number='{row.get('number') or ''}': {error}"
+        ),
+    )
+    logger.info("Filled quality column")
+    return updated
+
+
 def maintain() -> None:
     csv_path = Path(__file__).parent.parent.with_name("releases.csv")
     dataframe = load_csv(csv_path)
     logger.info(f"Loaded {dataframe.height} rows from {csv_path}")
     dataframe = validate_magnets(dataframe)
     magnets = [
-        magnet.strip()
-        for magnet in dataframe.get_column("magnet").cast(pl.String).fill_null("").to_list()
-        if magnet.strip()
+        raw_magnet.strip()
+        for raw_magnet in dataframe.get_column("magnet").cast(pl.String).fill_null("").to_list()
+        if raw_magnet.strip()
     ]
     logger.info(f"Fetching metadata for {len(magnets)} magnets")
     metadata_by_magnet = fetch_magnet_metadata(magnets)
     dataframe = add_size_column(dataframe, metadata_by_magnet)
     dataframe = add_file_hashes_column(dataframe, metadata_by_magnet)
+    dataframe = add_quality_column(dataframe, metadata_by_magnet)
     save_csv(csv_path, dataframe)
     logger.info(f"Saved csv to {csv_path}")

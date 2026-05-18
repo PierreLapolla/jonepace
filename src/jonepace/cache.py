@@ -17,7 +17,15 @@ def cache_path(root: Path) -> Path:
 
 
 def release_key(row: dict[str, object]) -> str:
+    return f"{release_identity(row)}::{release_type(row)}"
+
+
+def release_identity(row: dict[str, object]) -> str:
     return f"{row.get('arc') or ''}::{row.get('number') or ''}"
+
+
+def release_type(row: dict[str, object]) -> str:
+    return str(row.get("release_type") or "regular").strip().lower() or "regular"
 
 
 def parse_file_hash_list(value: object) -> list[str]:
@@ -51,8 +59,53 @@ def valid_release_rows(releases: pl.DataFrame) -> pl.DataFrame:
     return releases.filter(pl.Series("valid_magnet", valid_mask))
 
 
+def regular_releases(releases: pl.DataFrame) -> pl.DataFrame:
+    selected_rows = [
+        row
+        for row in releases.iter_rows(named=True)
+        if release_type(row) == "regular"
+    ]
+    return pl.DataFrame(selected_rows, schema=releases.schema)
+
+
+def prefer_extended_releases(releases: pl.DataFrame) -> pl.DataFrame:
+    valid_releases = valid_release_rows(releases)
+    extended_keys = {
+        release_identity(row)
+        for row in valid_releases.iter_rows(named=True)
+        if release_type(row) == "extended"
+    }
+
+    if not extended_keys:
+        return releases
+
+    selected_rows: list[dict[str, object]] = []
+    for row in releases.iter_rows(named=True):
+        key = release_identity(row)
+        variant = release_type(row)
+        if key in extended_keys and variant != "extended":
+            LOGGER.info(
+                f"Using extended release for arc='{row['arc']}' number='{row.get('number') or ''}'"
+            )
+            continue
+
+        selected_rows.append(row)
+
+    return pl.DataFrame(selected_rows, schema=releases.schema)
+
+
 def normalize_cache(dataframe: pl.DataFrame) -> pl.DataFrame:
-    return ensure_column(dataframe, "file_hashes", pl.String, default_value=None)
+    dataframe = ensure_column(dataframe, "release_type", pl.String, default_value="regular")
+    dataframe = ensure_column(dataframe, "file_hashes", pl.String, default_value=None)
+    dataframe = ensure_column(dataframe, "quality", pl.String, default_value=None)
+    return dataframe.with_columns(
+        pl.col("release_type")
+        .fill_null("regular")
+        .str.strip_chars()
+        .str.to_lowercase()
+        .replace("", "regular")
+        .alias("release_type")
+    )
 
 
 def load_or_create_cache(releases: pl.DataFrame, root: Path) -> pl.DataFrame:

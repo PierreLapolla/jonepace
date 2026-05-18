@@ -1,3 +1,6 @@
+![PyPI - Version](https://img.shields.io/pypi/v/jonepace)
+
+
 # Jonepace
 
 Jonepace downloads the full [One Pace](https://onepace.net/en) library for use in Jellyfin.
@@ -34,6 +37,8 @@ uv run jonepace
 | --- | --- |
 | `--destination PATH` | Directory where torrents will be downloaded. Default: current working directory. |
 | `--download-rate-limit RATE` | Cap aggregate download bandwidth. Accepts `B`, `KB`, `MB`, or `GB` suffixes such as `500KB`, `20MB`, or `1.5GB`. Use `0` for unlimited. Default: `0`. |
+| `--extended` | Prefer extended releases when an extended torrent is available. |
+| `--rebuild-cache` | Recreate `cache.csv` from current release metadata without downloading. |
 | `--maintainance` | Run CSV maintenance tasks instead of downloading the library. |
 
 ## Examples
@@ -56,6 +61,18 @@ Use both options together:
 uvx jonepace --destination "/srv/media/One Pace" --download-rate-limit 8MB
 ```
 
+Prefer extended releases when available:
+
+```bash
+uvx jonepace --extended
+```
+
+Rebuild the local cache metadata without downloading:
+
+```bash
+uvx jonepace --destination "/srv/media/One Pace" --rebuild-cache
+```
+
 ## Contributing
 
 Contributions are welcome, especially updates to the torrent list.
@@ -63,14 +80,13 @@ Contributions are welcome, especially updates to the torrent list.
 If you want to add or fix releases:
 
 1. Fork the repository.
-2. Update [releases.csv](releases.csv).
-3. Leave the `size` and `file_hashes` columns empty for new or changed rows.
-4. Run:
+2. Add or update rows in [releases.csv](releases.csv): fill `arc`, `number`, `magnet`, and `release_type` (`regular` or `extended`); leave `size`, `file_hashes`, and `quality` empty.
+3. Run:
 
 ```bash
 uv run -m jonepace --maintainance
 ```
 
-This validates the magnet links and fills the missing `size` and `file_hashes` values.
+This validates the magnet links and fills the missing `size`, `file_hashes`, and `quality` values.
 
-5. Commit the updated `releases.csv` and open a pull request.
+4. Commit the updated `releases.csv` and open a pull request.

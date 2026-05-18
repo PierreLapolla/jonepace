@@ -3,7 +3,13 @@ from pathlib import Path
 
 import polars as pl
 from pedros import get_logger
-from jonepace.cache import load_or_create_cache, pending_downloads, save_cache
+from jonepace.cache import (
+    load_or_create_cache,
+    pending_downloads,
+    prefer_extended_releases,
+    regular_releases,
+    save_cache,
+)
 from jonepace.csv_utils import load_csv_text
 from jonepace.libtorrent_wrapper import LibtorrentMagnetClient
 from jonepace.maintainance import maintain
@@ -81,10 +87,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         metavar="RATE",
         help="cap aggregate download speed; accepts B, KB, MB, or GB suffixes, 0 disables the limit",
     )
+    parser.add_argument(
+        "--extended",
+        action="store_true",
+        help="prefer extended releases when an extended torrent is available",
+    )
+    parser.add_argument(
+        "--rebuild-cache",
+        action="store_true",
+        help="recreate cache.csv from current release metadata without downloading",
+    )
     return parser.parse_args(argv)
 
 
 def get_releases() -> pl.DataFrame:
+    local_path = Path(__file__).parent.parent.with_name("releases.csv")
+    if local_path.exists():
+        LOGGER.warning(f"Loading releases from {local_path}")
+        return load_csv_text(local_path.read_text())
+
     url = "https://raw.githubusercontent.com/PierreLapolla/jonepace/refs/heads/master/releases.csv"
     response = get(url, timeout=30)
     response.raise_for_status()
@@ -105,8 +126,13 @@ def main(argv: list[str] | None = None) -> None:
 
     welcome()
     releases = get_releases()
+    if args.rebuild_cache:
+        save_cache(releases, args.destination)
+        return
+
+    selected_releases = prefer_extended_releases(releases) if args.extended else regular_releases(releases)
     cache = load_or_create_cache(releases, args.destination)
-    pending = pending_downloads(releases, cache, args.destination)
+    pending = pending_downloads(selected_releases, cache, args.destination)
     magnets = pending.get_column("magnet").to_list()
     pending_sizes = pending.get_column("size").cast(pl.Int64, strict=False).fill_null(0)
     pending_size = int(pending_sizes.sum())
