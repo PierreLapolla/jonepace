@@ -87,6 +87,6 @@ If you want to add or fix releases:
 uv run -m jonepace --maintainance
 ```
 
-This validates the magnet links and fills the missing `size`, `file_hashes`, and `quality` values.
+This validates the magnet links and refreshes the `size`, `file_hashes`, and `quality` values.
 
 4. Commit the updated `releases.csv` and open a pull request.

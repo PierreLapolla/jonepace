@@ -104,7 +104,7 @@ wheels = [
 
 [[package]]
 name = "jonepace"
-version = "2.1.1"
+version = "2.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "libtorrent" },
@@ -123,9 +123,9 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "libtorrent", specifier = ">=2.0.11" },
-    { name = "pedros", specifier = ">=0.12.3" },
+    { name = "pedros", specifier = ">=0.13.0" },
     { name = "polars", specifier = ">=1.30.0" },
-    { name = "requests", specifier = ">=2.34.1" },
+    { name = "requests", specifier = ">=2.34.2" },
     { name = "rich", specifier = ">=15.0.0" },
 ]
 
@@ -183,14 +183,14 @@ wheels = [
 
 [[package]]
 name = "pedros"
-version = "0.12.3"
+version = "0.13.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "wrapt" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1b/da/bed6b4b4e14d3b9a4e57bfe49ab41ba0280f1a9a127383e4f3186aa94637/pedros-0.12.3.tar.gz", hash = "sha256:bd5568de0a53f0c9b72d0914de7e04a269e3cbdd60725e093d87292c97e10436", size = 62696, upload-time = "2026-03-02T22:12:41.482Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/63/2e/8be1a2ea3608eee52b47ea91bdc7572f9702268ceaaf0605ed1c0946f338/pedros-0.13.0.tar.gz", hash = "sha256:ebb8cff581f416465666d9316ad8c13340be99cf2abadee65ef655d40f70d9a0", size = 80324, upload-time = "2026-05-20T09:28:18.445Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ed/a8/2b7aa1b3be8c7d56f67a3b60b9d07e34c83cce832bf04e48d54f90bae5f8/pedros-0.12.3-py3-none-any.whl", hash = "sha256:475ff9b0ad85ae619fc692727226c7e7e63ed5287752bccf61aed631c37f8935", size = 10687, upload-time = "2026-03-02T22:12:40.035Z" },
+    { url = "https://files.pythonhosted.org/packages/60/ad/16ac0b669241496fa40d722ff4dcae24a2935c90b688b4ffae27536c8a75/pedros-0.13.0-py3-none-any.whl", hash = "sha256:09f24a3bfce6bace3c18b33d26b5d9fa2ea7403b2b1b645fcefeb7080717e474", size = 13499, upload-time = "2026-05-20T09:28:16.838Z" },
 ]
 
 [[package]]
@@ -271,7 +271,7 @@ wheels = [
 
 [[package]]
 name = "requests"
-version = "2.34.1"
+version = "2.34.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "certifi" },
@@ -279,9 +279,9 @@ dependencies = [
     { name = "idna" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/24/36/7180e7f077c38108945dbbdf60fe04db681c3feb6e96419f8c6dc8723741/requests-2.34.1.tar.gz", hash = "sha256:0fc5669f2b69704449fe1552360bd2a73a54512dfd03e65529157f1513322beb", size = 142783, upload-time = "2026-05-13T19:20:24.662Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ac/c3/e2a2b89f2d3e2179abd6d00ebd70bff6273f37fb3e0cc209f48b39d00cbf/requests-2.34.2.tar.gz", hash = "sha256:f288924cae4e29463698d6d60bc6a4da69c89185ad1e0bcc4104f584e960b9ed", size = 142856, upload-time = "2026-05-14T19:25:27.735Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/15/5a/4a949d170476de3c04ac036b5466422fbcbf348a917d8042eedf2cac7d1b/requests-2.34.1-py3-none-any.whl", hash = "sha256:bf38a3ff993960d3dd819c08862c40b3c703306eb7c744fcd9f4ddbb95b548f0", size = 73085, upload-time = "2026-05-13T19:20:22.827Z" },
+    { url = "https://files.pythonhosted.org/packages/a0/f4/c67b0b3f1b9245e8d266f0f112c500d50e5b4e83cb6f3b71b6528104182a/requests-2.34.2-py3-none-any.whl", hash = "sha256:2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0", size = 73075, upload-time = "2026-05-14T19:25:26.443Z" },
 ]
 
 [[package]]

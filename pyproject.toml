@@ -28,8 +28,8 @@ classifiers = [
 dependencies = [
     "libtorrent>=2.0.11",
     "polars>=1.30.0",
-    "pedros>=0.12.3",
-    "requests>=2.34.1",
+    "pedros>=0.13.0",
+    "requests>=2.34.2",
     "rich>=15.0.0",
 ]
 

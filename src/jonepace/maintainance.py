@@ -202,7 +202,7 @@ def add_size_column(dataframe: pl.DataFrame, metadata_by_magnet: dict[str, dict]
         column_name="size",
         dtype=pl.Int64,
         default_value=None,
-        needs_update=lambda value: value is None or int(value) <= 0,
+        needs_update=lambda value: True,
         resolve_value=resolve_value,
         on_error=lambda row_index, row, error: logger.warning(
             f"Could not fill size for row {row_index} arc='{row['arc']}' number='{row.get('number') or ''}': {error}"
@@ -234,7 +234,7 @@ def add_file_hashes_column(dataframe: pl.DataFrame, metadata_by_magnet: dict[str
         column_name="file_hashes",
         dtype=pl.String,
         default_value=None,
-        needs_update=lambda value: parse_file_hash_list(value) is None,
+        needs_update=lambda value: True,
         resolve_value=resolve_value,
         on_error=lambda row_index, row, error: logger.warning(
             f"Could not fill file_hashes for row {row_index} arc='{row['arc']}' number='{row.get('number') or ''}': {error}"
@@ -265,7 +265,7 @@ def add_quality_column(dataframe: pl.DataFrame, metadata_by_magnet: dict[str, di
         column_name="quality",
         dtype=pl.String,
         default_value=None,
-        needs_update=lambda value: parse_quality_list(value) is None,
+        needs_update=lambda value: True,
         resolve_value=resolve_value,
         on_error=lambda row_index, row, error: logger.warning(
             f"Could not fill quality for row {row_index} arc='{row['arc']}' number='{row.get('number') or ''}': {error}"
