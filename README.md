@@ -23,6 +23,12 @@ Use the following command to start the download:
 uvx jonepace
 ```
 
+If `uvx` selects an unsupported Python version, force Python 3.13 and refresh the tool environment:
+
+```bash
+uvx --refresh --python 3.13 jonepace
+```
+
 When running from a local checkout during development, use:
 
 ```bash
